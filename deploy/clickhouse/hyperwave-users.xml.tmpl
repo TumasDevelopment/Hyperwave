@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<!--
+  Hyperwave: utenti di ClickHouse. setup.sh sostituisce i segnaposto e copia il file
+  in /etc/clickhouse-server/users.d/hyperwave.xml (leggibile solo da clickhouse).
+  L'utente "default" riceve una password casuale che non viene salvata: è bloccato.
+-->
+<clickhouse>
+    <profiles>
+        <default>
+            <log_queries>0</log_queries>
+        </default>
+        <hyperwave>
+            <log_queries>0</log_queries>
+            <max_memory_usage>@CH_QUERY_MEMORY@</max_memory_usage>
+            <max_bytes_before_external_group_by>@CH_SPILL@</max_bytes_before_external_group_by>
+            <max_bytes_before_external_sort>@CH_SPILL@</max_bytes_before_external_sort>
+            <max_execution_time>60</max_execution_time>
+            <output_format_json_quote_64bit_integers>0</output_format_json_quote_64bit_integers>
+            <async_insert>0</async_insert>
+        </hyperwave>
+    </profiles>
+
+    <users>
+        <default>
+            <password remove="1"/>
+            <password_sha256_hex>@DEFAULT_SHA256@</password_sha256_hex>
+            <networks replace="1">
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+            </networks>
+            <access_management>0</access_management>
+            <named_collection_control>0</named_collection_control>
+        </default>
+
+        <hyperwave>
+            <password_sha256_hex>@HW_SHA256@</password_sha256_hex>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+            </networks>
+            <profile>hyperwave</profile>
+            <quota>default</quota>
+            <grants>
+                <query>GRANT ALL ON hyperwave.*</query>
+            </grants>
+        </hyperwave>
+    </users>
+</clickhouse>

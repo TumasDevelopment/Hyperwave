@@ -1,0 +1,32 @@
+# Sensore di cattura: va installato sulla macchina collegata alla porta SPAN o al TAP.
+# Copiare core/bin/hw-sensor in /usr/local/bin e creare /etc/hyperwave/sensor.env con:
+#   HW_HUB_URL=https://hub.esempio.lan:3121
+#   HW_SENSOR_TOKEN=<token creato con hw-hub sensor-add o dalla pagina Sensori>
+#   HW_SENSOR_IFACE=eth1
+# poi: systemctl enable --now hyperwave-sensor
+[Unit]
+Description=Hyperwave sensore di rete
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+DynamicUser=yes
+EnvironmentFile=/etc/hyperwave/sensor.env
+ExecStart=/usr/local/bin/hw-sensor -mode capture -iface ${HW_SENSOR_IFACE}
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_PACKET AF_NETLINK
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

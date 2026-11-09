@@ -1,0 +1,23 @@
+# segreti e configurazione locale
+.env
+.env.*
+!.env.example
+
+# compilati
+/bin/
+/dist/
+*.test
+*.out
+
+# web
+web/node_modules/
+web/.next/
+web/out/
+*.tsbuildinfo
+
+# varie
+*.log
+*.pcap
+*.pcapng
+*.mmdb
+.DS_Store

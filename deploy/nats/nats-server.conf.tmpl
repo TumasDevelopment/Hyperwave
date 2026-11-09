@@ -1,0 +1,9 @@
+# Hyperwave: NATS solo locale, con token. setup.sh sostituisce il segnaposto.
+# Nessuna persistenza (JetStream spento): il bus porta solo eventi live.
+host: 127.0.0.1
+port: 4222
+max_payload: 1MB
+max_connections: 256
+authorization {
+  token: "@NATS_TOKEN@"
+}

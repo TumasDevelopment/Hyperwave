@@ -1,0 +1,23 @@
+[Unit]
+Description=Hyperwave sensore dimostrativo (dati di esempio, nessuna cattura)
+After=network-online.target hyperwave-hub.service
+Wants=network-online.target
+
+[Service]
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@ROOT@
+EnvironmentFile=@ROOT@/.env
+ExecStart=@ROOT@/core/bin/hw-sensor -mode demo
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

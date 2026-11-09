@@ -1,0 +1,30 @@
+[Unit]
+Description=Hyperwave interfaccia web (Next.js)
+After=network-online.target hyperwave-hub.service
+Wants=network-online.target
+
+[Service]
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@ROOT@/web
+EnvironmentFile=@ROOT@/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/env node @ROOT@/web/node_modules/next/dist/bin/next start -H ${HW_WEB_HOST} -p ${HW_WEB_PORT}
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=-@ROOT@/web/.next/cache
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

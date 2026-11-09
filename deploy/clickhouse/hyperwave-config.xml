@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<!--
+  Hyperwave: ClickHouse a nodo singolo, raggiungibile solo dalla macchina locale,
+  con consumi di memoria e disco contenuti. Va in /etc/clickhouse-server/config.d/.
+  Sui server dedicati si può alzare max_server_memory_usage_to_ram_ratio (es. 0.6).
+-->
+<clickhouse>
+    <!-- protocolli non usati da Hyperwave -->
+    <mysql_port remove="1"/>
+    <postgresql_port remove="1"/>
+    <interserver_http_port remove="1"/>
+
+    <max_server_memory_usage_to_ram_ratio>@CH_RAM_RATIO@</max_server_memory_usage_to_ram_ratio>
+    <uncompressed_cache_size>268435456</uncompressed_cache_size>
+    <mark_cache_size>268435456</mark_cache_size>
+    <index_mark_cache_size>67108864</index_mark_cache_size>
+    <query_condition_cache_size>33554432</query_condition_cache_size>
+
+    <logger>
+        <level>warning</level>
+        <size>50M</size>
+        <count>3</count>
+    </logger>
+
+    <!-- tabelle di log interne: spente per non consumare disco -->
+    <query_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <query_views_log remove="1"/>
+    <query_metric_log remove="1"/>
+    <part_log remove="1"/>
+    <trace_log remove="1"/>
+    <instrumentation_trace_log remove="1"/>
+    <metric_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <text_log remove="1"/>
+    <session_log remove="1"/>
+    <opentelemetry_span_log remove="1"/>
+    <processors_profile_log remove="1"/>
+    <asynchronous_insert_log remove="1"/>
+    <backup_log remove="1"/>
+    <blob_storage_log remove="1"/>
+    <error_log remove="1"/>
+    <background_schedule_pool_log remove="1"/>
+    <iceberg_metadata_log remove="1"/>
+    <delta_lake_metadata_log remove="1"/>
+</clickhouse>
