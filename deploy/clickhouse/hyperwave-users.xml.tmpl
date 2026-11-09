@@ -42,6 +42,8 @@
             <quota>default</quota>
             <grants>
                 <query>GRANT ALL ON hyperwave.*</query>
+                <!-- Per la pagina Impostazioni: spazio occupato dalle tabelle. -->
+                <query>GRANT SELECT ON system.parts</query>
             </grants>
         </hyperwave>
     </users>

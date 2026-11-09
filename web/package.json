@@ -1,0 +1,33 @@
+{
+  "name": "hyperwave-web",
+  "version": "1.0.0",
+  "description": "Interfaccia web di Hyperwave: traffico, dispositivi e allarmi della rete",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1 -p 4120",
+    "build": "next build",
+    "start": "node scripts/start.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"tests/*.test.mjs\"",
+    "utente": "node scripts/utente.mjs"
+  },
+  "dependencies": {
+    "geist": "1.9.2",
+    "nats": "2.29.3",
+    "next": "16.4.2",
+    "pg": "^8.23.1",
+    "qrcode-generator": "^1.4.4",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "server-only": "^0.0.1",
+    "uplot": "^1.6.32"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "@types/pg": "^8",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5"
+  }
+}
