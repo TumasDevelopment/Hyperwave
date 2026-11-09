@@ -5,6 +5,7 @@
 
 # compilati
 /bin/
+core/bin/
 /dist/
 *.test
 *.out

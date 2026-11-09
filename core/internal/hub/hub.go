@@ -1,0 +1,296 @@
+// Package hub riceve i dati dai sensori, li arricchisce, li scrive nei database,
+// mantiene l'inventario, esegue le regole di rilevamento e pubblica gli eventi live.
+package hub
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nats-io/nats.go"
+
+	"hyperwave/internal/chx"
+	"hyperwave/internal/env"
+	"hyperwave/internal/netx"
+	"hyperwave/internal/store"
+	"hyperwave/internal/version"
+)
+
+// Config viene dalle variabili d'ambiente (file .env).
+type Config struct {
+	DatabaseURL      string
+	ClickHouseURL    string
+	ClickHouseDB     string
+	ClickHouseUser   string
+	ClickHousePass   string
+	NATSURL          string
+	NATSToken        string
+	Listen           string
+	InternalNets     string
+	SensitiveNets    string
+	RetentionDays    int
+	AggRetentionDays int
+	AlertRetention   int // giorni per gli allarmi chiusi
+	AuditRetention   int // giorni per il registro delle attività
+	GeoIPCity        string
+	GeoIPASN         string
+	OUIPath          string
+	VigilURL         string
+	LearningHours    int
+	Timezone         string
+}
+
+func ConfigFromEnv() Config {
+	return Config{
+		DatabaseURL:      env.Str("DATABASE_URL", ""),
+		ClickHouseURL:    env.Str("CLICKHOUSE_URL", "http://127.0.0.1:8123"),
+		ClickHouseDB:     env.Str("CLICKHOUSE_DB", "hyperwave"),
+		ClickHouseUser:   env.Str("CLICKHOUSE_USER", "hyperwave"),
+		ClickHousePass:   env.Str("CLICKHOUSE_PASSWORD", ""),
+		NATSURL:          env.Str("NATS_URL", "nats://127.0.0.1:4222"),
+		NATSToken:        env.Str("NATS_TOKEN", ""),
+		Listen:           env.Str("HW_HUB_LISTEN", "127.0.0.1:3121"),
+		InternalNets:     env.Str("HW_INTERNAL_NETS", netx.DefaultInternal),
+		SensitiveNets:    env.Str("HW_SENSITIVE_NETS", ""),
+		RetentionDays:    env.Int("HW_RETENTION_DAYS", 30),
+		AggRetentionDays: env.Int("HW_AGG_RETENTION_DAYS", 400),
+		AlertRetention:   env.Int("HW_ALERT_RETENTION_DAYS", 365),
+		AuditRetention:   env.Int("HW_AUDIT_RETENTION_DAYS", 730),
+		GeoIPCity:        env.Str("HW_GEOIP_CITY", ""),
+		GeoIPASN:         env.Str("HW_GEOIP_ASN", ""),
+		OUIPath:          env.Str("HW_OUI_CSV", "/usr/share/ieee-data/oui.csv"),
+		VigilURL:         strings.TrimRight(env.Str("VIGIL_URL", ""), "/"),
+		LearningHours:    env.Int("HW_LEARNING_HOURS", 24),
+		Timezone:         env.Str("HW_TZ", "Europe/Rome"),
+	}
+}
+
+// Hub tiene le connessioni e lo stato condiviso tra ingest, inventario e motore.
+type Hub struct {
+	cfg    Config
+	log    *slog.Logger
+	pg     *pgxpool.Pool
+	ch     *chx.Client
+	nc     *nats.Conn
+	state  *State
+	enr    *Enricher
+	inv    *Inventory
+	eng    *Engine
+	live   *livePublisher
+	auth   *sensorAuth
+	supp   *suppressions
+	marks  sync.Map // sensorID → *watermark (avanzamento del backfill)
+	start  time.Time
+	ingest ingestStats
+}
+
+// Connect apre i database, applica le migrazioni e si collega a NATS.
+func Connect(ctx context.Context, cfg Config, log *slog.Logger) (*Hub, error) {
+	if cfg.DatabaseURL == "" {
+		return nil, errors.New("DATABASE_URL è vuota")
+	}
+	h := &Hub{cfg: cfg, log: log, start: time.Now()}
+
+	pg, err := store.OpenPG(ctx, cfg.DatabaseURL, 12)
+	if err != nil {
+		return nil, err
+	}
+	h.pg = pg
+	if applied, err := store.MigratePG(ctx, pg); err != nil {
+		return nil, err
+	} else if len(applied) > 0 {
+		log.Info("migrazioni PostgreSQL applicate", "file", applied)
+	}
+
+	h.ch = chx.New(cfg.ClickHouseURL, cfg.ClickHouseDB, cfg.ClickHouseUser, cfg.ClickHousePass)
+	if err := h.ch.Ping(ctx); err != nil {
+		return nil, fmt.Errorf("ClickHouse non raggiungibile: %w", err)
+	}
+	if applied, err := store.MigrateCH(ctx, h.ch, store.CHOptions{RetentionDays: cfg.RetentionDays, AggRetentionDays: cfg.AggRetentionDays}); err != nil {
+		return nil, err
+	} else if len(applied) > 0 {
+		log.Info("migrazioni ClickHouse applicate", "file", applied)
+	}
+
+	h.state = newState(cfg)
+	if err := h.state.reload(ctx, pg); err != nil {
+		return nil, err
+	}
+	h.enr = newEnricher(cfg, log)
+	h.auth = newSensorAuth()
+	h.supp = &suppressions{}
+	h.inv = newInventory(h)
+	if err := h.inv.load(ctx); err != nil {
+		return nil, err
+	}
+	h.eng = newEngine(h)
+	if err := h.eng.syncCatalog(ctx); err != nil {
+		return nil, err
+	}
+
+	// NATS serve solo alla parte live: se non c'è, l'hub lavora lo stesso e riprova da solo.
+	opts := []nats.Option{
+		nats.Name("hyperwave-hub " + version.Version),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(2 * time.Second),
+		nats.RetryOnFailedConnect(true),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			if err != nil {
+				log.Warn("NATS disconnesso", "err", err)
+			}
+		}),
+		nats.ReconnectHandler(func(*nats.Conn) { log.Info("NATS riconnesso") }),
+	}
+	if cfg.NATSToken != "" {
+		opts = append(opts, nats.Token(cfg.NATSToken))
+	}
+	nc, err := nats.Connect(cfg.NATSURL, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("NATS: %w", err)
+	}
+	h.nc = nc
+	h.live = newLivePublisher(h)
+	return h, nil
+}
+
+func (h *Hub) Close() {
+	if h.nc != nil {
+		h.nc.Drain()
+	}
+	h.enr.close()
+	h.pg.Close()
+}
+
+// Run avvia il server HTTP e le attività periodiche; termina quando ctx viene annullato.
+func (h *Hub) Run(ctx context.Context) error {
+	// Il web avvisa l'hub quando cambia qualcosa: niente attesa del giro successivo.
+	sub, err := h.nc.Subscribe("hw.control.>", func(m *nats.Msg) {
+		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		h.log.Info("comando ricevuto", "subject", m.Subject)
+		switch m.Subject {
+		case "hw.control.sensors":
+			h.auth.flush()
+		case "hw.control.rules":
+			h.eng.reloadRules(rctx)
+			h.supp.load(rctx, h.pg)
+		default:
+			if err := h.state.reload(rctx, h.pg); err != nil {
+				h.log.Warn("rilettura impostazioni", "err", err)
+			}
+		}
+		h.live.publishState()
+	})
+	if err != nil {
+		return err
+	}
+	defer sub.Unsubscribe()
+
+	srv := &http.Server{
+		Addr:              h.cfg.Listen,
+		Handler:           h.routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+	}
+	errc := make(chan error, 1)
+	go func() {
+		h.log.Info("hub in ascolto", "addr", h.cfg.Listen, "version", version.Version)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errc <- err
+		}
+	}()
+
+	var wg sync.WaitGroup
+	every := func(name string, d time.Duration, fn func(context.Context) error) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t := time.NewTicker(d)
+			defer t.Stop()
+			for {
+				if err := fn(ctx); err != nil && ctx.Err() == nil {
+					h.log.Warn("attività periodica", "task", name, "err", err)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
+			}
+		}()
+	}
+	every("live", 5*time.Second, func(ctx context.Context) error {
+		err := h.state.reload(ctx, h.pg)
+		h.live.publishState()
+		return err
+	})
+	every("inventario", 10*time.Second, h.inv.flush)
+	every("motore", 60*time.Second, h.eng.tick)
+	every("sensori", 20*time.Second, h.checkSensors)
+	every("nomi", 60*time.Second, func(ctx context.Context) error { return h.enr.refreshNames(ctx, h.pg) })
+	every("eccezioni", 60*time.Second, func(ctx context.Context) error { return h.supp.load(ctx, h.pg) })
+	every("pulizia", time.Hour, h.cleanup)
+	if h.cfg.VigilURL != "" {
+		every("vigil", 30*time.Second, h.checkVigil)
+	}
+
+	select {
+	case <-ctx.Done():
+	case err := <-errc:
+		return err
+	}
+	sctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	srv.Shutdown(sctx)
+	wg.Wait()
+	// ultimo salvataggio dell'inventario raccolto in memoria
+	return h.inv.flush(sctx)
+}
+
+// cleanup cancella da PostgreSQL ciò che ha superato la conservazione.
+// ClickHouse si pulisce da solo con i TTL.
+func (h *Hub) cleanup(ctx context.Context) error {
+	stmts := []struct {
+		sql  string
+		args []any
+	}{
+		{"DELETE FROM sessions WHERE expires_at < now()", nil},
+		{"DELETE FROM alerts WHERE status = 'resolved' AND resolved_at < now() - make_interval(days => $1)", []any{h.cfg.AlertRetention}},
+		{"DELETE FROM audit_log WHERE ts < now() - make_interval(days => $1)", []any{h.cfg.AuditRetention}},
+		{"DELETE FROM suppressions WHERE expires_at < now() - interval '30 days'", nil},
+		{"DELETE FROM device_services WHERE last_seen < now() - make_interval(days => $1)", []any{h.cfg.AggRetentionDays}},
+	}
+	for _, s := range stmts {
+		if _, err := h.pg.Exec(ctx, s.sql, s.args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkVigil registra se Vigil (il monitoraggio dei dispositivi) è raggiungibile.
+func (h *Hub) checkVigil(ctx context.Context) error {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ok, msg := false, ""
+	req, _ := http.NewRequestWithContext(cctx, http.MethodGet, h.cfg.VigilURL+"/api/salute", nil)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		msg = "non raggiungibile"
+	} else {
+		res.Body.Close()
+		ok = res.StatusCode == http.StatusOK
+		if !ok {
+			msg = fmt.Sprintf("risposta %d", res.StatusCode)
+		}
+	}
+	return h.state.setVigil(ctx, h.pg, ok, msg)
+}

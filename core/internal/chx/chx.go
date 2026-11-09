@@ -27,7 +27,9 @@ func New(base, db, user, password string) *Client {
 
 func (c *Client) do(ctx context.Context, query string, params map[string]string, body io.Reader, gz bool) (io.ReadCloser, error) {
 	q := url.Values{}
-	q.Set("database", c.DB)
+	if c.DB != "" {
+		q.Set("database", c.DB)
+	}
 	q.Set("output_format_json_quote_64bit_integers", "0")
 	for k, v := range params {
 		q.Set("param_"+k, v)
@@ -110,6 +112,18 @@ func Query[T any](ctx context.Context, c *Client, query string, params map[strin
 		out = append(out, v)
 	}
 	return out, sc.Err()
+}
+
+// WithDB restituisce una copia del client che usa un altro database ("" = nessuno).
+func (c *Client) WithDB(db string) *Client {
+	cp := *c
+	cp.DB = db
+	return &cp
+}
+
+// Ping verifica che il server risponda e che le credenziali siano valide.
+func (c *Client) Ping(ctx context.Context) error {
+	return c.WithDB("").Exec(ctx, "SELECT 1", nil)
 }
 
 // Time formatta un tempo per DateTime64(3, 'UTC').

@@ -35,8 +35,9 @@ type Flow struct {
 	BytesIn  uint64  `json:"bin"`  // dal server al client
 	PktsOut  uint32  `json:"pout"`
 	PktsIn   uint32  `json:"pin"`
-	Flags    string  `json:"flags,omitempty"`
-	RTT      float32 `json:"rtt,omitempty"` // handshake TCP, ms
+	Flags    string  `json:"flags,omitempty"` // unione dei flag TCP visti nei due versi
+	Est      bool    `json:"est,omitempty"`   // il server ha risposto: SYN-ACK per TCP, un pacchetto per UDP e ICMP
+	RTT      float32 `json:"rtt,omitempty"`   // handshake TCP, ms
 	Retrans  uint32  `json:"retrans,omitempty"`
 	Country  string  `json:"cc,omitempty"` // dell'estremo esterno, se già noto
 	ASN      uint32  `json:"asn,omitempty"`
@@ -135,5 +136,13 @@ type HubReply struct {
 	Accepted     int      `json:"accepted,omitempty"`
 	InternalNets []string `json:"internal_nets,omitempty"`
 	ServerTime   int64    `json:"server_time,omitempty"`
+	LastIngest   int64    `json:"last_ingest,omitempty"` // ultimo dato ricevuto da questo sensore (ms)
 	Error        string   `json:"error,omitempty"`
 }
+
+// Limiti del protocollo, uguali per hub e sensore.
+const (
+	MaxBatchRecords = 50_000
+	MaxBodyBytes    = 64 << 20  // corpo compresso
+	MaxPlainBytes   = 512 << 20 // corpo decompresso
+)
