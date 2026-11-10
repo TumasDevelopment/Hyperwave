@@ -1,7 +1,13 @@
+import { existsSync } from "node:fs";
 import type { NextConfig } from "next";
+
+// La configurazione sta in ../.env (la stessa dell'hub). Serve anche in compilazione:
+// il fuso orario delle pagine (HW_TZ) viene scritto nel codice che gira nel browser.
+if (existsSync("../.env")) process.loadEnvFile("../.env");
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  env: { NEXT_PUBLIC_HW_TZ: process.env.HW_TZ || process.env.NEXT_PUBLIC_HW_TZ || "Europe/Rome" },
   serverExternalPackages: ["pg", "nats"],
   turbopack: { root: process.cwd() },
   async headers() {
