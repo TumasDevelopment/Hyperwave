@@ -81,6 +81,16 @@ func (c *Client) Heartbeat(ctx context.Context, hb model.Heartbeat) (model.HubRe
 	return c.post(ctx, "/v1/heartbeat", hb)
 }
 
+// SendOnce invia un batch con un solo tentativo: la coda su disco gestisce i nuovi tentativi.
+func (c *Client) SendOnce(ctx context.Context, b *model.Batch) (model.HubReply, error) {
+	return c.post(ctx, "/v1/ingest", b)
+}
+
+// isPermanent indica un rifiuto che non cambia riprovando: lotto malformato o troppo grande.
+func isPermanent(err error) bool {
+	return err != nil && (strings.HasPrefix(err.Error(), "hub 400") || strings.HasPrefix(err.Error(), "hub 413"))
+}
+
 // Send invia un batch e riprova con attese crescenti finché riesce o ctx viene annullato.
 func (c *Client) Send(ctx context.Context, b *model.Batch) (model.HubReply, error) {
 	wait := time.Second
@@ -90,7 +100,7 @@ func (c *Client) Send(ctx context.Context, b *model.Batch) (model.HubReply, erro
 			return rep, nil
 		}
 		// un batch rifiutato perché malformato non va ripetuto all'infinito
-		if strings.HasPrefix(err.Error(), "hub 400") || strings.HasPrefix(err.Error(), "hub 413") {
+		if isPermanent(err) {
 			return rep, err
 		}
 		select {

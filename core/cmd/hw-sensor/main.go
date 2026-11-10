@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -59,6 +60,8 @@ func main() {
 		IgnoreNets:  env.Str("HW_CAPTURE_IGNORE", ""),
 		SuricataEve: env.Str("HW_SURICATA_EVE", ""),
 		MaxPending:  env.Int("HW_MAX_PENDING", 500_000),
+		SpoolDir:    spoolDir(),
+		SpoolMaxMB:  env.Int("HW_SPOOL_MAX_MB", 2048),
 	}
 	r, err := sensor.New(cfg, log)
 	if err != nil {
@@ -71,6 +74,21 @@ func main() {
 		log.Error("errore", "err", err)
 		os.Exit(1)
 	}
+}
+
+// spoolDir: HW_SPOOL_DIR, altrimenti la cartella di stato data da systemd (StateDirectory=).
+// "off" disattiva la coda su disco.
+func spoolDir() string {
+	dir := env.Str("HW_SPOOL_DIR", "")
+	if strings.EqualFold(dir, "off") {
+		return ""
+	}
+	if dir == "" {
+		if state := os.Getenv("STATE_DIRECTORY"); state != "" {
+			dir = filepath.Join(strings.Split(state, ":")[0], "coda")
+		}
+	}
+	return dir
 }
 
 func list(s string) []string {

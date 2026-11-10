@@ -3,6 +3,8 @@
 #   HW_HUB_URL=https://hub.esempio.lan:3121
 #   HW_SENSOR_TOKEN=<token creato con hw-hub sensor-add o dalla pagina Sensori>
 #   HW_SENSOR_IFACE=eth1
+# La coda su disco (lotti non ancora consegnati all'hub) sta in /var/lib/hyperwave-sensor/coda,
+# cifrata con una chiave derivata dal token; limite con HW_SPOOL_MAX_MB (predefinito 2048).
 # poi: systemctl enable --now hyperwave-sensor
 [Unit]
 Description=Hyperwave sensore di rete
@@ -12,6 +14,8 @@ Wants=network-online.target
 [Service]
 DynamicUser=yes
 EnvironmentFile=/etc/hyperwave/sensor.env
+StateDirectory=hyperwave-sensor
+StateDirectoryMode=0700
 ExecStart=/usr/local/bin/hw-sensor -mode capture -iface ${HW_SENSOR_IFACE}
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN

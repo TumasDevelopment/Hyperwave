@@ -20,6 +20,9 @@ const STAT_LABELS: Record<string, string> = {
   sent: "Record inviati",
   dropped_records: "Record scartati (coda piena)",
   pending_records: "Record in coda",
+  spool_records: "Record nella coda su disco",
+  spool_bytes: "Byte nella coda su disco",
+  spool_dropped: "Record scartati dalla coda su disco",
   ids_events: "Eventi IDS letti",
 };
 

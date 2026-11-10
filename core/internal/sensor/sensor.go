@@ -33,6 +33,8 @@ type Config struct {
 	IgnoreNets  string // traffico da non registrare (per esempio quello del sensore verso l'hub)
 	SuricataEve string // eve.json di Suricata da cui leggere gli allarmi IDS
 	MaxPending  int    // record in attesa oltre i quali si scarta (hub non raggiungibile)
+	SpoolDir    string // coda su disco per i lotti non consegnati (solo capture); vuoto = disattivata
+	SpoolMaxMB  int    // spazio massimo della coda; oltre si scartano i lotti più vecchi
 }
 
 // Runner tiene lo stato condiviso tra raccolta, invio e heartbeat.
@@ -47,6 +49,9 @@ type Runner struct {
 	nets       atomic.Pointer[netx.Nets]
 	sent       atomic.Int64
 	started    time.Time
+	sp         *spool // nil se la coda su disco è disattivata
+	savedMu    sync.Mutex
+	saved      string // ultimo stato salvato su disco, per scriverlo solo quando cambia
 
 	statsMu sync.Mutex
 	stats   map[string]func() any // contatori aggiuntivi della modalità attiva
@@ -87,6 +92,22 @@ func New(cfg Config, log *slog.Logger) (*Runner, error) {
 	r := &Runner{cfg: cfg, log: log, cl: cl, hostname: host, started: time.Now(), stats: map[string]func() any{}}
 	def := netx.ParseNets(netx.DefaultInternal)
 	r.nets.Store(&def)
+	if cfg.Mode == "capture" && cfg.SpoolDir != "" {
+		if cfg.SpoolMaxMB <= 0 {
+			cfg.SpoolMaxMB = 2048
+		}
+		sp, err := openSpool(cfg.SpoolDir, int64(cfg.SpoolMaxMB)<<20, cfg.Token)
+		if err != nil {
+			return nil, err
+		}
+		r.cfg = cfg
+		r.sp = sp
+		files, bytes, records := sp.stats()
+		log.Info("coda su disco attiva", "cartella", cfg.SpoolDir, "limite_mb", cfg.SpoolMaxMB, "lotti_in_attesa", files, "record", records, "byte", bytes)
+		r.addStat("spool_records", func() any { _, _, n := sp.stats(); return n })
+		r.addStat("spool_bytes", func() any { _, b, _ := sp.stats(); return b })
+		r.addStat("spool_dropped", func() any { return sp.dropped.Load() })
+	}
 	return r, nil
 }
 
@@ -113,6 +134,26 @@ func (r *Runner) apply(rep model.HubReply) {
 			break
 		}
 	}
+	r.saveState()
+}
+
+// saveState scrive su disco live e reti interne quando cambiano, per ripartire anche con l'hub giù.
+func (r *Runner) saveState() {
+	if r.sp == nil {
+		return
+	}
+	st := savedState{Live: r.live.Load(), InternalNets: r.Nets().Strings()}
+	key := fmt.Sprint(st.Live, st.InternalNets)
+	r.savedMu.Lock()
+	defer r.savedMu.Unlock()
+	if key == r.saved {
+		return
+	}
+	if err := r.sp.saveState(st); err != nil {
+		r.log.Warn("salvataggio dello stato non riuscito", "err", err)
+		return
+	}
+	r.saved = key
 }
 
 func (r *Runner) heartbeat(ctx context.Context) error {
@@ -135,6 +176,22 @@ func (r *Runner) heartbeat(ctx context.Context) error {
 	return nil
 }
 
+// loadSavedState applica lo stato salvato su disco, se c'è la coda.
+func (r *Runner) loadSavedState() (savedState, bool) {
+	if r.sp == nil {
+		return savedState{}, false
+	}
+	st, ok := r.sp.loadState()
+	if !ok {
+		return st, false
+	}
+	r.live.Store(st.Live)
+	if n := netx.ParseNets(strings.Join(st.InternalNets, ",")); len(n) > 0 {
+		r.nets.Store(&n)
+	}
+	return st, true
+}
+
 // Run si presenta all'hub e avvia la modalità scelta. Ritorna quando ctx viene annullato.
 func (r *Runner) Run(ctx context.Context) error {
 	r.log.Info("sensore avviato", "versione", version.Version, "modalità", r.cfg.Mode, "hub", r.cfg.HubURL)
@@ -152,6 +209,13 @@ func (r *Runner) Run(ctx context.Context) error {
 			r.log.Error("token rifiutato: controllare HW_SENSOR_TOKEN e che il sensore sia attivo sull'hub")
 			wait = time.Minute
 		} else {
+			// Con la coda su disco si può partire con l'ultimo stato noto: i dati restano su disco
+			// e arrivano all'hub quando torna raggiungibile.
+			if st, ok := r.loadSavedState(); ok {
+				r.log.Warn("hub non raggiungibile: avvio con l'ultimo stato salvato, i dati vanno nella coda su disco",
+					"err", err, "live", st.Live, "salvato", time.UnixMilli(st.Saved).Format(time.RFC3339))
+				break
+			}
 			r.log.Warn("hub non raggiungibile", "err", err, "nuovo tentativo tra", wait)
 		}
 		select {
@@ -197,7 +261,8 @@ func (r *Runner) Run(ctx context.Context) error {
 // ---------------------------------------------------------------- sink
 
 // sink accumula i record prodotti dalla cattura e li spedisce a intervalli.
-// Se l'hub non risponde trattiene fino a MaxPending record, poi scarta i nuovi e lo conta.
+// Senza coda su disco, se l'hub non risponde trattiene fino a MaxPending record, poi scarta
+// i nuovi e lo conta. Con la coda, i lotti non consegnati vanno su disco e ripartono dopo.
 type sink struct {
 	r        *Runner
 	backfill bool
@@ -206,6 +271,10 @@ type sink struct {
 	b       *model.Batch
 	dropped atomic.Int64
 	kick    chan struct{}
+
+	// solo con la coda su disco, usati dalla goroutine di invio
+	nextTry time.Time     // prima di quest'ora non si riprova l'hub: i lotti vanno direttamente su disco
+	backoff time.Duration // attesa dopo l'ultimo errore, raddoppia fino a un minuto
 }
 
 func newSink(r *Runner, backfill bool) *sink {
@@ -309,8 +378,13 @@ func split(b *model.Batch, size int) []*model.Batch {
 	return out
 }
 
-// flush spedisce tutto ciò che è in attesa; Send riprova da solo finché l'hub risponde.
+// flush spedisce tutto ciò che è in attesa. Senza coda su disco Send riprova finché l'hub
+// risponde; con la coda, un tentativo solo e in caso di errore il lotto va su disco.
 func (s *sink) flush(ctx context.Context) {
+	if s.r.sp != nil {
+		s.flushSpool(ctx)
+		return
+	}
 	b := s.take()
 	if b == nil {
 		return
@@ -327,6 +401,77 @@ func (s *sink) flush(ctx context.Context) {
 		}
 		s.r.apply(rep)
 		s.r.sent.Add(int64(rep.Accepted))
+	}
+}
+
+// spoolDrainBudget limita il recupero della coda a ogni giro, così i dati nuovi non restano indietro.
+const spoolDrainBudget = 3 * time.Second
+
+func (s *sink) flushSpool(ctx context.Context) {
+	var parts []*model.Batch
+	if b := s.take(); b != nil {
+		b.Backfill = s.backfill
+		parts = split(b, model.MaxBatchRecords/2)
+	}
+	if time.Now().Before(s.nextTry) {
+		s.toDisk(parts)
+		return
+	}
+	for i, part := range parts {
+		if !s.deliver(ctx, part) {
+			s.toDisk(parts[i:])
+			return
+		}
+	}
+	deadline := time.Now().Add(spoolDrainBudget)
+	for time.Now().Before(deadline) && ctx.Err() == nil {
+		name, part, ok := s.r.sp.oldest()
+		if !ok {
+			return
+		}
+		if !s.deliver(ctx, part) {
+			return
+		}
+		s.r.sp.remove(name)
+	}
+}
+
+// deliver prova a consegnare un lotto una volta. Restituisce false se va riprovato più tardi;
+// un lotto rifiutato perché malformato conta come consegnato (ripeterlo non servirebbe) e scartato.
+func (s *sink) deliver(ctx context.Context, b *model.Batch) bool {
+	rep, err := s.r.cl.SendOnce(ctx, b)
+	if err == nil {
+		s.backoff, s.nextTry = 0, time.Time{}
+		s.r.apply(rep)
+		s.r.sent.Add(int64(rep.Accepted))
+		return true
+	}
+	if isPermanent(err) {
+		s.r.log.Warn("lotto rifiutato dall'hub e scartato", "err", err, "record", b.Len())
+		s.dropped.Add(int64(b.Len()))
+		return true
+	}
+	switch {
+	case errors.Is(err, ErrUnauthorized):
+		s.backoff = time.Minute
+	case s.backoff == 0:
+		s.backoff = 2 * time.Second
+	default:
+		s.backoff = min(s.backoff*2, time.Minute)
+	}
+	s.nextTry = time.Now().Add(s.backoff)
+	if ctx.Err() == nil {
+		s.r.log.Warn("hub non raggiungibile, i lotti vanno nella coda su disco", "err", err, "nuovo tentativo tra", s.backoff)
+	}
+	return false
+}
+
+func (s *sink) toDisk(parts []*model.Batch) {
+	for _, part := range parts {
+		if err := s.r.sp.put(part); err != nil {
+			s.r.log.Error("scrittura nella coda su disco non riuscita: lotto perso", "err", err, "record", part.Len())
+			s.dropped.Add(int64(part.Len()))
+		}
 	}
 }
 
