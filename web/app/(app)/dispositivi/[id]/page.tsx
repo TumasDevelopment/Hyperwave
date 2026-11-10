@@ -9,6 +9,7 @@ import { fmtAgo, fmtBytes, fmtDateTime, fmtNum } from "@/lib/format";
 import { CRITICALITY_LABELS, SERIES_COLORS } from "@/lib/labels";
 import { deviceNames } from "@/lib/names";
 import { deviceAlerts } from "@/lib/queries/alerts";
+import { sessionsFor } from "@/lib/queries/analysis";
 import { deviceDomains, devicePeers, deviceServices, deviceTraffic, getDevice } from "@/lib/queries/devices";
 
 type Props = { params: Promise<{ id: string }> };
@@ -26,13 +27,14 @@ export default async function DevicePage({ params }: Props) {
   const d = await getDevice(id);
   if (!d) notFound();
   const ips = [...new Set([d.ip, ...d.ips].filter(Boolean))];
-  const [services, traffic, peers, domains, alerts, names] = await Promise.all([
+  const [services, traffic, peers, domains, alerts, names, sessions] = await Promise.all([
     deviceServices(id),
     safe(deviceTraffic(ips), [], "traffico del dispositivo"),
     safe(devicePeers(ips), [], "interlocutori"),
     safe(deviceDomains(ips), [], "domini"),
     deviceAlerts(id, ips),
     deviceNames(),
+    safe(sessionsFor(ips), [], "sessioni"),
   ]);
   const analyst = can(user, "analyst");
   const title = d.name || d.hostname || d.ip || d.mac;
@@ -254,6 +256,49 @@ export default async function DevicePage({ params }: Props) {
           </Card>
         </div>
       </div>
+
+      <Card title="Accessi e sessioni · 7 giorni">
+        {sessions.failed ? (
+          <LoadError what="le sessioni" />
+        ) : sessions.data.length === 0 ? (
+          <Empty>Nessuna sessione SSH, RDP, SMB, Kerberos o NTLM negli ultimi 7 giorni.</Empty>
+        ) : (
+          <div className="table-wrap">
+            <table className="table table--compact">
+              <thead>
+                <tr>
+                  <th>Protocollo</th>
+                  <th>Con</th>
+                  <th>Utente</th>
+                  <th>Dettagli</th>
+                  <th className="num">Sessioni</th>
+                  <th>Ultima</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.data.map((s) => (
+                  <tr key={`${s.protocol}|${s.peer}|${s.role}|${s.user}`}>
+                    <td className="nowrap">
+                      {s.protocol.toUpperCase()} <span className="muted small">{s.role === "client" ? "in uscita" : "in entrata"}</span>
+                    </td>
+                    <td>
+                      <Ip ip={s.peer} names={names} />
+                    </td>
+                    <td className="mono small">{s.user ? (s.domain ? `${s.domain}\\${s.user}` : s.user) : "—"}</td>
+                    <td className="small">
+                      {s.auth && <span className="muted">{s.auth} · </span>}
+                      {s.info}
+                      {s.weak && <span className="pill pill--warn">{s.weak}</span>}
+                    </td>
+                    <td className="num">{fmtNum(s.sessions)}</td>
+                    <td className="muted nowrap">{fmtAgo(s.last)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
 
       <Card title="Allarmi" className="anchor">
         <span id="allarmi" />

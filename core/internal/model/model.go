@@ -4,19 +4,20 @@ package model
 
 // Batch è il corpo di POST /v1/ingest (JSON compresso con gzip).
 type Batch struct {
-	Backfill bool    `json:"backfill,omitempty"` // dati storici: niente eventi live
-	Demo     bool    `json:"demo,omitempty"`     // dati dimostrativi
-	Flows    []Flow  `json:"flows,omitempty"`
-	DNS      []DNS   `json:"dns,omitempty"`
-	TLS      []TLS   `json:"tls,omitempty"`
-	HTTP     []HTTP  `json:"http,omitempty"`
-	Hosts    []Host  `json:"hosts,omitempty"`
-	Events   []Event `json:"events,omitempty"`
-	Rates    []Rate  `json:"rates,omitempty"`
+	Backfill bool      `json:"backfill,omitempty"` // dati storici: niente eventi live
+	Demo     bool      `json:"demo,omitempty"`     // dati dimostrativi
+	Flows    []Flow    `json:"flows,omitempty"`
+	DNS      []DNS     `json:"dns,omitempty"`
+	TLS      []TLS     `json:"tls,omitempty"`
+	HTTP     []HTTP    `json:"http,omitempty"`
+	Sessions []Session `json:"sessions,omitempty"`
+	Hosts    []Host    `json:"hosts,omitempty"`
+	Events   []Event   `json:"events,omitempty"`
+	Rates    []Rate    `json:"rates,omitempty"`
 }
 
 func (b *Batch) Len() int {
-	return len(b.Flows) + len(b.DNS) + len(b.TLS) + len(b.HTTP) + len(b.Hosts) + len(b.Events) + len(b.Rates)
+	return len(b.Flows) + len(b.DNS) + len(b.TLS) + len(b.HTTP) + len(b.Sessions) + len(b.Hosts) + len(b.Events) + len(b.Rates)
 }
 
 // Flow è una conversazione: il client è chi ha aperto la connessione.
@@ -68,6 +69,7 @@ type TLS struct {
 	CertIssuer   string `json:"ciss,omitempty"`
 	CertNotAfter int64  `json:"cexp,omitempty"` // secondi Unix
 	SelfSigned   bool   `json:"cself,omitempty"`
+	Transport    string `json:"tr,omitempty"` // "quic" per QUIC, vuoto per TCP
 }
 
 type HTTP struct {
@@ -146,3 +148,24 @@ const (
 	MaxBodyBytes    = 64 << 20  // corpo compresso
 	MaxPlainBytes   = 512 << 20 // corpo decompresso
 )
+
+// Session riassume un protocollo applicativo riconosciuto oltre a TLS e HTTP:
+// SSH, RDP, SMB, Kerberos e le autenticazioni NTLM viste in qualsiasi protocollo.
+type Session struct {
+	TS         int64  `json:"ts"`
+	Client     string `json:"client"`
+	Server     string `json:"server"`
+	Port       uint16 `json:"port"`
+	Transport  string `json:"tr"`               // tcp | udp
+	Protocol   string `json:"proto"`            // ssh | rdp | smb | kerberos | ntlm
+	Auth       string `json:"auth,omitempty"`   // NTLMv1 | NTLMv2 | Kerberos
+	User       string `json:"user,omitempty"`   // utente dichiarato in chiaro
+	Domain     string `json:"domain,omitempty"` // dominio Windows o realm Kerberos
+	Host       string `json:"host,omitempty"`   // workstation del client, server o servizio richiesto
+	ClientSW   string `json:"csw,omitempty"`    // software del client (banner)
+	ServerSW   string `json:"ssw,omitempty"`
+	Hash       string `json:"hash,omitempty"`  // impronta del client (HASSH per SSH)
+	ServerHash string `json:"shash,omitempty"` // impronta del server (HASSHServer)
+	Info       string `json:"info,omitempty"`  // dialetto, condivisioni, esito...
+	Weak       string `json:"weak,omitempty"`  // perché la sessione è debole: vuoto se non lo è
+}

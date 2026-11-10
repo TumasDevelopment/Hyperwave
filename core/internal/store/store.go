@@ -218,7 +218,7 @@ func applyRetention(ctx context.Context, ch *chx.Client, db string, opt CHOption
 	}
 	ttl := map[string]string{
 		"flows": "toDateTime(ts)", "dns": "toDateTime(ts)", "tls": "toDateTime(ts)", "http": "toDateTime(ts)", "rates": "toDateTime(ts)",
-		"events": "toDateTime(ts)", "traffic_1m": "minute", "hosts_1h": "hour", "dns_1h": "hour",
+		"events": "toDateTime(ts)", "sessions": "toDateTime(ts)", "traffic_1m": "minute", "hosts_1h": "hour", "dns_1h": "hour",
 	}
 	for _, t := range tables {
 		expr, ok := ttl[t.Name]
@@ -226,7 +226,7 @@ func applyRetention(ctx context.Context, ch *chx.Client, db string, opt CHOption
 			continue
 		}
 		days := opt.RetentionDays
-		if expr != "toDateTime(ts)" || t.Name == "events" {
+		if expr != "toDateTime(ts)" || t.Name == "events" || t.Name == "sessions" {
 			days = opt.AggRetentionDays
 		}
 		want := fmt.Sprintf("INTERVAL %d DAY", days)

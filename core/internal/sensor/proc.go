@@ -12,6 +12,7 @@ import (
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 
+	"hyperwave/internal/classify"
 	"hyperwave/internal/model"
 	"hyperwave/internal/netx"
 )
@@ -77,6 +78,13 @@ type flow struct {
 	tlsSent  bool
 
 	http []model.HTTP // richieste in attesa di risposta
+
+	// altri protocolli (apps.go, quic.go)
+	app     *appState
+	quic    *quicState
+	appName string // applicazione riconosciuta dal contenuto
+	appSegs uint8
+	appSeen uint8 // versi di cui si è già guardato il primo segmento
 }
 
 type dnsKey struct {
@@ -112,6 +120,7 @@ type proc struct {
 	dnsPending map[dnsKey]int64
 	dhcpSeen   map[string]dhcpInfo
 	hostSeen   map[string]int64
+	appStates  int
 
 	rateStart                int64
 	rIn, rOut, rInt, rPkts   uint64
@@ -339,6 +348,9 @@ func (p *proc) packet(data []byte, ci gopacket.CaptureInfo, lt layers.LinkType) 
 		if dir == 1 {
 			f.est = true
 		}
+		if proto == 17 && len(payload) > 0 {
+			p.appUDP(f, dir, payload, ts)
+		}
 		return
 	}
 
@@ -385,6 +397,9 @@ func (p *proc) dissectTCP(f *flow, dir int, seq uint32, payload []byte, ts int64
 	if f.tlsState == 0 && dir == 0 {
 		if isTLSStart(payload) {
 			f.tlsState = 1
+			if classify.ByPort("TCP", f.srv.Port()) == "" {
+				f.appName = "TLS"
+			}
 		} else {
 			f.tlsState = 2
 		}
@@ -405,6 +420,12 @@ func (p *proc) dissectTCP(f *flow, dir int, seq uint32, payload []byte, ts int64
 						f.domain = h.Host
 					}
 					f.http = append(f.http, h)
+					if f.appName == "" && classify.ByPort("TCP", f.srv.Port()) == "" {
+						f.appName = "HTTP"
+					}
+					if n, ok := httpNTLM(payload); ok {
+						p.ntlmSession(f, n, "HTTP", ts)
+					}
 				}
 				break
 			}
@@ -417,6 +438,7 @@ func (p *proc) dissectTCP(f *flow, dir int, seq uint32, payload []byte, ts int64
 			p.out.put(func(b *model.Batch) { b.HTTP = append(b.HTTP, h) })
 		}
 	}
+	p.appTCP(f, dir, seq, payload, ts)
 }
 
 func isIP(s string) bool {
@@ -729,7 +751,7 @@ func protoName(p uint8) string {
 func (p *proc) export(f *flow, final bool) {
 	mf := model.Flow{TS: f.start, End: f.last, VLAN: f.vlan, Proto: protoName(f.proto),
 		SrcIP: f.cli.Addr().String(), SrcPort: f.cli.Port(), DstIP: f.srv.Addr().String(), DstPort: f.dport,
-		Domain: f.domain, BytesOut: f.bOut, BytesIn: f.bIn, PktsOut: f.pOut, PktsIn: f.pIn, Est: f.est, RTT: f.rtt, Retrans: f.retrans}
+		App: f.appName, Domain: f.domain, BytesOut: f.bOut, BytesIn: f.bIn, PktsOut: f.pOut, PktsIn: f.pIn, Est: f.est, RTT: f.rtt, Retrans: f.retrans}
 	if f.proto == 6 {
 		mf.Flags = flagString(f.flags)
 	}
@@ -739,8 +761,10 @@ func (p *proc) export(f *flow, final bool) {
 	if f.bOut+f.bIn > 0 {
 		p.out.put(func(b *model.Batch) { b.Flows = append(b.Flows, mf) })
 	}
+	p.appEmit(f)
 	if final {
 		p.emitTLS(f)
+		p.appClose(f)
 		for _, h := range f.http {
 			p.out.put(func(b *model.Batch) { b.HTTP = append(b.HTTP, h) })
 		}

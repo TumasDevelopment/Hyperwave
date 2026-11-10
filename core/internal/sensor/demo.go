@@ -360,6 +360,20 @@ func (d *demo) session(b *model.Batch, ts int64, h *dHost, s *dSvc) {
 	case s.Port == 80 && d.rng.IntN(2) == 0:
 		b.HTTP = append(b.HTTP, model.HTTP{TS: ts + 30, Client: h.IP, Server: s.IP, Port: 80, Method: "GET", Host: s.Domain, URI: "/", Status: 200,
 			UserAgent: "Microsoft-CryptoAPI/10.0"})
+	case s.Port == 445 && d.rng.IntN(4) == 0:
+		ss := model.Session{TS: ts + 20, Client: h.IP, Server: s.IP, Port: 445, Transport: "tcp", Protocol: "smb", Auth: "NTLMv2",
+			User: demoUser(h), Domain: "AZIENDA", Host: h.Name, Info: "SMB 3.1.1 · firma obbligatoria · condivisioni: IPC$, dati"}
+		if s.IP == "10.10.20.60" { // il server di stampa vecchio parla ancora SMBv1
+			ss.Info, ss.Weak = "SMB 1 · condivisioni: IPC$, stampanti", "SMBv1"
+		}
+		b.Sessions = append(b.Sessions, ss)
+	case s.Port == 88 && d.rng.IntN(4) == 0:
+		svc := "cifs/FS01.azienda.internal"
+		if d.rng.IntN(3) == 0 {
+			svc = "MSSQLSvc/DB01.azienda.internal:1433"
+		}
+		b.Sessions = append(b.Sessions, model.Session{TS: ts + 10, Client: h.IP, Server: s.IP, Port: 88, Transport: "tcp", Protocol: "kerberos",
+			Auth: "Kerberos", User: demoUser(h), Domain: "AZIENDA.INTERNAL", Host: svc, Info: "TGS-REQ (aes256, aes128, rc4-hmac) → TGS-REP, ticket aes256"})
 	case s.IP == "10.10.20.80" && d.rng.IntN(3) == 0:
 		b.TLS = append(b.TLS, model.TLS{TS: ts + 40, Client: h.IP, Server: s.IP, Port: 5001, Version: "TLSv1.0",
 			CertSubject: "CN=NAS01", CertIssuer: "CN=NAS01", CertNotAfter: ts/1000 + 400*86400, SelfSigned: true})
@@ -641,6 +655,14 @@ func (d *demo) liveScenarios(b *model.Batch, t0, t1 int64) {
 			for i, srv := range []string{"10.10.20.10", "10.10.20.11", "10.10.20.20", "10.10.20.30", "10.10.20.40", "10.10.20.50", "10.10.20.60", "10.10.20.70"} {
 				d.flow(b, t+120_000+int64(i)*3_000, "10.10.20.66", 20, local(srv, 445, "TCP", 8_000, 30_000, 1), 8_000, 30_000)
 			}
+			// Kerberoasting: ticket RC4 per molti account di servizio
+			for i, svc := range []string{"MSSQLSvc/DB01.azienda.internal:1433", "HTTP/ERP01.azienda.internal", "backup/BACKUP01.azienda.internal", "cifs/NAS01.azienda.internal", "WSUS/WSUS01.azienda.internal"} {
+				ts := t + 150_000 + int64(i)*800
+				d.flow(b, ts, "10.10.20.66", 20, local("10.10.20.10", 88, "TCP", 1_400, 1_600, 1), 1_400, 1_600)
+				b.Sessions = append(b.Sessions, model.Session{TS: ts + 10, Client: "10.10.20.66", Server: "10.10.20.10", Port: 88, Transport: "tcp",
+					Protocol: "kerberos", Auth: "Kerberos", User: "svc-scanner", Domain: "AZIENDA.INTERNAL", Host: svc,
+					Info: "TGS-REQ (rc4-hmac) → TGS-REP, ticket rc4-hmac", Weak: "ticket cifrato con rc4-hmac"})
+			}
 			b.HTTP = append(b.HTTP, model.HTTP{TS: t + 90_000, Client: "10.10.20.66", Server: "10.10.20.40", Port: 80, Method: "GET", Host: "10.10.20.40",
 				URI: "/nmaplowercheck1731", Status: 404, UserAgent: "Mozilla/5.0 (compatible; Nmap Scripting Engine; https://nmap.org/book/nse.html)"})
 			b.Events = append(b.Events, model.Event{TS: t + 90_000, Kind: "ids", Severity: "high", Title: "ET SCAN Nmap Scripting Engine User-Agent Detected",
@@ -653,6 +675,8 @@ func (d *demo) liveScenarios(b *model.Batch, t0, t1 int64) {
 		d.rdpShown = true
 		f := d.flow(b, t, "203.0.113.77", 20, local("10.10.20.40", 3389, "TCP", 4_000, 9_000, 1), 4_000, 9_000)
 		f.Country = "RU"
+		b.Sessions = append(b.Sessions, model.Session{TS: t + 15, Client: "203.0.113.77", Server: "10.10.20.40", Port: 3389, Transport: "tcp",
+			Protocol: "rdp", User: "administrator", Info: "richiesti: TLS; scelto: TLS", Weak: "TLS senza autenticazione a livello di rete (NLA)"})
 	}
 
 	// primo contatto con l'Argentina, dopo 25 minuti
@@ -769,4 +793,12 @@ func (d *demo) live(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// demoUser inventa l'utente di una postazione dal suo nome.
+func demoUser(h *dHost) string {
+	if h.Name == "" {
+		return ""
+	}
+	return strings.ToLower(strings.TrimPrefix(h.Name, "PC-"))
 }

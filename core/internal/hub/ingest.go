@@ -183,6 +183,7 @@ type tlsRow struct {
 	Client      string `json:"client"`
 	Server      string `json:"server"`
 	Port        uint16 `json:"port"`
+	Transport   string `json:"transport"`
 	SNI         string `json:"sni"`
 	Version     string `json:"version"`
 	ALPN        string `json:"alpn"`
@@ -206,6 +207,35 @@ type httpRow struct {
 	Status    uint16 `json:"status"`
 	UserAgent string `json:"user_agent"`
 	Demo      uint8  `json:"demo"`
+}
+
+type sessionRow struct {
+	TS         string `json:"ts"`
+	SensorID   int64  `json:"sensor_id"`
+	Client     string `json:"client"`
+	Server     string `json:"server"`
+	Port       uint16 `json:"port"`
+	Transport  string `json:"transport"`
+	Protocol   string `json:"protocol"`
+	Auth       string `json:"auth"`
+	User       string `json:"user"`
+	Domain     string `json:"domain"`
+	Host       string `json:"host"`
+	ClientSW   string `json:"client_sw"`
+	ServerSW   string `json:"server_sw"`
+	Hash       string `json:"hash"`
+	ServerHash string `json:"server_hash"`
+	Info       string `json:"info"`
+	Weak       string `json:"weak"`
+	Demo       uint8  `json:"demo"`
+}
+
+// transport normalizza il trasporto dichiarato dal sensore.
+func transport(s string) string {
+	if s == "quic" || s == "udp" {
+		return s
+	}
+	return "tcp"
 }
 
 type eventRow struct {
@@ -309,7 +339,7 @@ func (h *Hub) store(ctx context.Context, s *Sensor, b *model.Batch) (n int, maxT
 		if !validIP(t.Server) || !ok(t.TS) {
 			continue
 		}
-		tlsRows = append(tlsRows, tlsRow{chx.Time(t.TS), s.ID, t.Client, t.Server, t.Port, clip(strings.ToLower(t.SNI), 253), clip(t.Version, 16),
+		tlsRows = append(tlsRows, tlsRow{chx.Time(t.TS), s.ID, t.Client, t.Server, t.Port, transport(t.Transport), clip(strings.ToLower(t.SNI), 253), clip(t.Version, 16),
 			clip(t.ALPN, 32), clip(t.JA4, 64), clip(t.CertSubject, 256), clip(t.CertIssuer, 256), t.CertNotAfter, b2u(t.SelfSigned), demo})
 	}
 	httpRows := make([]any, 0, len(b.HTTP))
@@ -319,6 +349,15 @@ func (h *Hub) store(ctx context.Context, s *Sensor, b *model.Batch) (n int, maxT
 		}
 		httpRows = append(httpRows, httpRow{chx.Time(x.TS), s.ID, x.Client, x.Server, x.Port, clip(x.Method, 16), clip(strings.ToLower(x.Host), 253),
 			clip(x.URI, 1024), x.Status, clip(x.UserAgent, 512), demo})
+	}
+	sessRows := make([]any, 0, len(b.Sessions))
+	for _, x := range b.Sessions {
+		if !validIP(x.Client) || !validIP(x.Server) || !ok(x.TS) || x.Protocol == "" {
+			continue
+		}
+		sessRows = append(sessRows, sessionRow{chx.Time(x.TS), s.ID, x.Client, x.Server, x.Port, transport(x.Transport), clip(strings.ToLower(x.Protocol), 16),
+			clip(x.Auth, 16), clip(x.User, 128), clip(x.Domain, 255), clip(x.Host, 255), clip(x.ClientSW, 255), clip(x.ServerSW, 255),
+			clip(x.Hash, 64), clip(x.ServerHash, 64), clip(x.Info, 512), clip(x.Weak, 255), demo})
 	}
 	evRows := make([]any, 0, len(b.Events))
 	for _, ev := range b.Events {
@@ -350,7 +389,7 @@ func (h *Hub) store(ctx context.Context, s *Sensor, b *model.Batch) (n int, maxT
 	for _, t := range []struct {
 		table string
 		rows  []any
-	}{{"flows", flows}, {"dns", dnsRows}, {"tls", tlsRows}, {"http", httpRows}, {"events", evRows}, {"rates", rateRows}} {
+	}{{"flows", flows}, {"dns", dnsRows}, {"tls", tlsRows}, {"http", httpRows}, {"sessions", sessRows}, {"events", evRows}, {"rates", rateRows}} {
 		if err := h.ch.Insert(ctx, t.table, t.rows); err != nil {
 			return 0, 0, err
 		}

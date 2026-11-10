@@ -59,7 +59,7 @@ var domains = []struct{ suffix, app string }{
 }
 
 // generiche: quando il dominio è noto, l'applicazione per dominio vince.
-var generic = map[string]bool{"": true, "HTTPS": true, "HTTP": true, "QUIC": true, "STUN": true, "RTP": true, "Zoom": true}
+var generic = map[string]bool{"": true, "HTTPS": true, "HTTP": true, "TLS": true, "QUIC": true, "STUN": true, "RTP": true, "Zoom": true}
 
 // Refine sostituisce un'applicazione generica con quella ricavata dal dominio.
 func Refine(app, domain string) string {

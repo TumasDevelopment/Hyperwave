@@ -88,8 +88,8 @@ export async function tlsOverview(range: RangeKey) {
        FROM tls WHERE ${TS_RANGE} AND ja4 != '' GROUP BY ja4 ORDER BY clients ASC, sessions DESC LIMIT 25`,
       { t0, t1 },
     ),
-    ch<{ sni: string; sessions: number; clients: number }>(
-      `SELECT sni, count() AS sessions, uniq(client) AS clients FROM tls WHERE ${TS_RANGE} AND sni != ''
+    ch<{ sni: string; sessions: number; clients: number; quic: number }>(
+      `SELECT sni, count() AS sessions, uniq(client) AS clients, countIf(transport = 'quic') AS quic FROM tls WHERE ${TS_RANGE} AND sni != ''
        GROUP BY sni ORDER BY sessions DESC LIMIT 25`,
       { t0, t1 },
     ),
@@ -134,5 +134,65 @@ export async function idsEvents(range: RangeKey) {
             toString(max(ts)) AS last
      FROM events WHERE ${TS_RANGE} AND kind = 'ids' GROUP BY signature ORDER BY events DESC LIMIT 30`,
     { t0, t1 },
+  );
+}
+
+// Altri protocolli: SSH, RDP, SMB, Kerberos, NTLM (tabella sessions)
+
+export async function protocolsOverview(range: RangeKey) {
+  const { t0, t1 } = timeWindow(range);
+  const [protocols, weak, users, kerberos, ssh, shares] = await Promise.all([
+    ch<{ protocol: string; sessions: number; clients: number; servers: number; weak: number }>(
+      `SELECT protocol, count() AS sessions, uniq(client) AS clients, uniq(server) AS servers, countIf(weak != '') AS weak
+       FROM sessions WHERE ${TS_RANGE} GROUP BY protocol ORDER BY sessions DESC`,
+      { t0, t1 },
+    ),
+    ch<{ protocol: string; server: string; port: number; weak: string; sessions: number; clients: number; users: string[]; last: string }>(
+      `SELECT protocol, server, any(port) AS port, weak, count() AS sessions, uniq(client) AS clients,
+              groupUniqArrayIf(5)(user, user != '') AS users, toString(max(ts)) AS last
+       FROM sessions WHERE ${TS_RANGE} AND weak != '' GROUP BY protocol, server, weak ORDER BY sessions DESC LIMIT 50`,
+      { t0, t1 },
+    ),
+    ch<{ user: string; domain: string; auth: string; sessions: number; clients: string[]; protocols: string[]; last: string }>(
+      `SELECT user, any(domain) AS domain, any(auth) AS auth, count() AS sessions, groupUniqArray(4)(client) AS clients,
+              groupUniqArray(protocol) AS protocols, toString(max(ts)) AS last
+       FROM sessions WHERE ${TS_RANGE} AND user != '' GROUP BY user ORDER BY sessions DESC LIMIT 40`,
+      { t0, t1 },
+    ),
+    ch<{ error: string; attempts: number; clients: number; users: string[] }>(
+      `SELECT extract(info, 'errore: (.*)$') AS error, count() AS attempts, uniq(client) AS clients, groupUniqArrayIf(6)(user, user != '') AS users
+       FROM sessions WHERE ${TS_RANGE} AND protocol = 'kerberos' AND position(info, 'errore: ') > 0
+       GROUP BY error ORDER BY attempts DESC LIMIT 20`,
+      { t0, t1 },
+    ),
+    ch<{ software: string; side: string; sessions: number; hosts: number }>(
+      `SELECT software, side, count() AS sessions, uniq(host) AS hosts FROM (
+         SELECT client_sw AS software, 'client' AS side, client AS host FROM sessions WHERE ${TS_RANGE} AND protocol = 'ssh' AND client_sw != ''
+         UNION ALL
+         SELECT server_sw AS software, 'server' AS side, server AS host FROM sessions WHERE ${TS_RANGE} AND protocol = 'ssh' AND server_sw != ''
+       ) GROUP BY software, side ORDER BY sessions DESC LIMIT 30`,
+      { t0, t1 },
+    ),
+    ch<{ server: string; shares: string; sessions: number; clients: number }>(
+      `SELECT server, arrayStringConcat(arrayDistinct(arrayFlatten(groupArray(splitByString(', ', extract(info, 'condivisioni: ([^·]+)'))))), ', ') AS shares,
+              count() AS sessions, uniq(client) AS clients
+       FROM sessions WHERE ${TS_RANGE} AND protocol = 'smb' AND position(info, 'condivisioni: ') > 0
+       GROUP BY server ORDER BY sessions DESC LIMIT 30`,
+      { t0, t1 },
+    ),
+  ]);
+  return { protocols, weak, users, kerberos, ssh, shares };
+}
+
+/** Sessioni di un indirizzo, come client o come server: per la pagina del dispositivo. */
+export async function sessionsFor(ips: string[], range: RangeKey = "7d") {
+  if (ips.length === 0) return [];
+  const { t0, t1 } = timeWindow(range);
+  return ch<{ protocol: string; peer: string; role: string; user: string; domain: string; auth: string; info: string; weak: string; sessions: number; last: string }>(
+    `SELECT protocol, if(client IN {ips:Array(String)}, server, client) AS peer, if(client IN {ips:Array(String)}, 'client', 'server') AS role,
+            user, any(domain) AS domain, any(auth) AS auth, any(info) AS info, any(weak) AS weak, count() AS sessions, toString(max(ts)) AS last
+     FROM sessions WHERE ${TS_RANGE} AND (client IN {ips:Array(String)} OR server IN {ips:Array(String)})
+     GROUP BY protocol, peer, role, user ORDER BY max(ts) DESC LIMIT 30`,
+    { t0, t1, ips },
   );
 }

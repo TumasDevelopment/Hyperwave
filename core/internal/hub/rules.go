@@ -13,6 +13,10 @@ import (
 
 // catalog elenca tutte le regole. Gli ID non vanno cambiati: sono salvati negli allarmi.
 func catalog() []*RuleDef {
+	return append(baseCatalog(), protoCatalog()...)
+}
+
+func baseCatalog() []*RuleDef {
 	return []*RuleDef{
 		{
 			ID: "portscan", Name: "Scansione di porte", Category: "Ricognizione", Severity: "high", Mitre: "T1046",

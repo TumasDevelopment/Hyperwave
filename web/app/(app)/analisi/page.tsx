@@ -4,14 +4,14 @@ import { requireUser } from "@/lib/auth";
 import { fmtAgo, fmtDateTime, fmtNum, fmtPct, fmtTime } from "@/lib/format";
 import { PALETTE, SERIES_COLORS } from "@/lib/labels";
 import { deviceNames } from "@/lib/names";
-import { dnsOverview, httpOverview, idsEvents, newDomains, tlsOverview } from "@/lib/queries/analysis";
+import { dnsOverview, httpOverview, idsEvents, newDomains, protocolsOverview, tlsOverview } from "@/lib/queries/analysis";
 import { one, parseRange, type RangeKey } from "@/lib/ranges";
 
 export const metadata = { title: "Analisi" };
 
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
 
-const TABS = { dns: "DNS", tls: "TLS e certificati", http: "HTTP in chiaro", ids: "Eventi IDS" } as const;
+const TABS = { dns: "DNS", tls: "TLS e certificati", http: "HTTP in chiaro", proto: "Accessi e protocolli", ids: "Eventi IDS" } as const;
 type Tab = keyof typeof TABS;
 const RANGE_OPTIONS: RangeKey[] = ["1h", "6h", "24h", "7d"];
 
@@ -24,7 +24,7 @@ export default async function AnalysisPage({ searchParams }: Props) {
 
   return (
     <>
-      <PageHead title="Analisi" sub="Cosa dicono i protocolli: nomi richiesti, cifratura, siti visitati senza HTTPS, segnalazioni dell'IDS.">
+      <PageHead title="Analisi" sub="Cosa dicono i protocolli: nomi richiesti, cifratura, siti visitati senza HTTPS, accessi a Windows e SSH, segnalazioni dell'IDS.">
         <RangePicker current={safeRange} base="/analisi" params={{ tab }} options={RANGE_OPTIONS} />
       </PageHead>
       <Tabs
@@ -34,6 +34,7 @@ export default async function AnalysisPage({ searchParams }: Props) {
       {tab === "dns" && <DnsTab range={safeRange} />}
       {tab === "tls" && <TlsTab range={safeRange} />}
       {tab === "http" && <HttpTab range={safeRange} />}
+      {tab === "proto" && <ProtoTab range={safeRange} />}
       {tab === "ids" && <IdsTab range={safeRange} />}
     </>
   );
@@ -197,7 +198,7 @@ async function TlsTab({ range }: { range: RangeKey }) {
       </Card>
       <div className="grid-2">
         <Card title="Nomi dei server (SNI) più contattati">
-          <BarList format={fmtNum} rows={sni.map((s) => ({ key: s.sni, label: <span className="mono">{s.sni}</span>, value: s.sessions, extra: `${s.clients} client`, href: `/flussi?range=${range}&domain=${encodeURIComponent(s.sni)}` }))} />
+          <BarList format={fmtNum} rows={sni.map((s) => ({ key: s.sni, label: <span className="mono">{s.sni}</span>, value: s.sessions, extra: `${s.clients} client${s.quic ? ` · ${fmtNum(s.quic)} su QUIC` : ""}`, href: `/flussi?range=${range}&domain=${encodeURIComponent(s.sni)}` }))} />
         </Card>
         <Card title="Impronte dei client (JA4) più rare">
           <p className="muted small">Ogni programma che usa TLS ha un&apos;impronta. Un&apos;impronta usata da un solo client merita uno sguardo: può essere uno strumento insolito o malware.</p>
@@ -331,5 +332,182 @@ async function IdsTab({ range }: { range: RangeKey }) {
         </div>
       )}
     </Card>
+  );
+}
+
+const PROTO_LABELS: Record<string, string> = { ssh: "SSH", rdp: "Desktop remoto (RDP)", smb: "Condivisioni Windows (SMB)", kerberos: "Kerberos", ntlm: "NTLM" };
+
+async function ProtoTab({ range }: { range: RangeKey }) {
+  const [res, names] = await Promise.all([safe(protocolsOverview(range), null, "protocolli"), deviceNames()]);
+  if (!res.data) return <LoadError what="i dati dei protocolli" />;
+  const { protocols, weak, users, kerberos, ssh, shares } = res.data;
+  const who = (ip: string) => (
+    <>
+      <Link href={`/flussi?range=${range}&ip=${ip}`} className="mono">
+        {ip}
+      </Link>{" "}
+      <span className="muted small">{names.get(ip)?.label}</span>
+    </>
+  );
+  return (
+    <>
+      <p className="muted small">
+        Il sensore legge l&apos;inizio delle connessioni SSH, RDP, SMB e Kerberos e le autenticazioni NTLM, anche dentro HTTP o RPC. Utenti e nomi
+        compaiono perché viaggiano in chiaro: le password no.
+      </p>
+      <div className="grid-2">
+        <Card title="Protocolli riconosciuti">
+          <BarList
+            format={fmtNum}
+            empty="Nessuna sessione SSH, RDP, SMB, Kerberos o NTLM nel periodo."
+            rows={protocols.map((p) => ({
+              key: p.protocol,
+              label: PROTO_LABELS[p.protocol] ?? p.protocol,
+              value: p.sessions,
+              extra: `${fmtNum(p.clients)} client · ${fmtNum(p.servers)} server${p.weak ? ` · ${fmtNum(p.weak)} deboli` : ""}`,
+            }))}
+          />
+        </Card>
+        <Card title="Errori Kerberos">
+          <p className="muted small">Molte password errate da uno stesso host, o su tanti utenti diversi, indicano un tentativo di indovinare le password.</p>
+          {kerberos.length === 0 ? (
+            <Empty>Nessun errore Kerberos nel periodo.</Empty>
+          ) : (
+            <table className="table table--compact">
+              <tbody>
+                {kerberos.map((k) => (
+                  <tr key={k.error}>
+                    <td className="small">{k.error}</td>
+                    <td className="small muted">{k.users.join(", ")}</td>
+                    <td className="num">{fmtNum(k.attempts)}</td>
+                    <td className="num muted">{fmtNum(k.clients)} host</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      </div>
+      <Card title="Configurazioni deboli">
+        {weak.length === 0 ? (
+          <Empty>Nessun protocollo debole nel periodo: niente SMBv1, NTLMv1, RDP senza NLA, ticket RC4 o algoritmi SSH rotti.</Empty>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Server</th>
+                  <th>Protocollo</th>
+                  <th>Problema</th>
+                  <th>Utenti</th>
+                  <th className="num">Sessioni</th>
+                  <th>Ultima</th>
+                </tr>
+              </thead>
+              <tbody>
+                {weak.map((w) => (
+                  <tr key={`${w.server}|${w.protocol}|${w.weak}`}>
+                    <td>
+                      {who(w.server)}
+                      <span className="muted small"> porta {w.port}</span>
+                    </td>
+                    <td>{PROTO_LABELS[w.protocol] ?? w.protocol}</td>
+                    <td>
+                      <span className="pill pill--warn">{w.weak}</span>
+                    </td>
+                    <td className="small">{w.users.join(", ") || "—"}</td>
+                    <td className="num">
+                      {fmtNum(w.sessions)} <span className="muted small">da {fmtNum(w.clients)} client</span>
+                    </td>
+                    <td className="muted nowrap">{fmtAgo(w.last)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      <Card title="Utenti visti in rete">
+        {users.length === 0 ? (
+          <Empty>Nessun utente nel periodo. Gli utenti compaiono con le autenticazioni NTLM e Kerberos e con i cookie RDP.</Empty>
+        ) : (
+          <div className="table-wrap">
+            <table className="table table--compact">
+              <thead>
+                <tr>
+                  <th>Utente</th>
+                  <th>Autenticazione</th>
+                  <th>Da</th>
+                  <th>Protocolli</th>
+                  <th className="num">Sessioni</th>
+                  <th>Ultima</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((u) => (
+                  <tr key={u.user}>
+                    <td>
+                      <span className="mono">{u.domain ? `${u.domain}\\${u.user}` : u.user}</span>
+                    </td>
+                    <td className="small">{u.auth || "—"}</td>
+                    <td className="small">
+                      {u.clients.map((c, i) => (
+                        <span key={c}>
+                          {i > 0 && ", "}
+                          <Link href={`/flussi?range=${range}&ip=${c}`} className="mono">
+                            {names.get(c)?.label ?? c}
+                          </Link>
+                        </span>
+                      ))}
+                    </td>
+                    <td className="small muted">{u.protocols.map((p) => p.toUpperCase()).join(", ")}</td>
+                    <td className="num">{fmtNum(u.sessions)}</td>
+                    <td className="muted nowrap">{fmtAgo(u.last)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      <div className="grid-2">
+        <Card title="Condivisioni SMB usate">
+          {shares.length === 0 ? (
+            <Empty>Nessuna condivisione vista nel periodo. Con SMB 3 cifrato le condivisioni non si vedono.</Empty>
+          ) : (
+            <table className="table table--compact">
+              <tbody>
+                {shares.map((s) => (
+                  <tr key={s.server}>
+                    <td>{who(s.server)}</td>
+                    <td className="mono small">{s.shares}</td>
+                    <td className="num">{fmtNum(s.clients)} client</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+        <Card title="Software SSH">
+          <p className="muted small">Un client SSH insolito, o un server SSH dove non te lo aspetti, merita uno sguardo.</p>
+          {ssh.length === 0 ? (
+            <Empty>Nessuna connessione SSH nel periodo.</Empty>
+          ) : (
+            <table className="table table--compact">
+              <tbody>
+                {ssh.map((s) => (
+                  <tr key={`${s.side}|${s.software}`}>
+                    <td className="mono small break">{s.software}</td>
+                    <td className="small muted">{s.side === "client" ? "client" : "server"}</td>
+                    <td className="num">{fmtNum(s.hosts)} host</td>
+                    <td className="num muted">{fmtNum(s.sessions)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      </div>
+    </>
   );
 }
