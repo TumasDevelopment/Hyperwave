@@ -34,7 +34,15 @@ pacchetto ─► sensore ─► lotto (ogni 5 s, gzip, token) ─► hub ─┬�
   - TLS: SNI, versione, impronta JA4, certificato del server (soggetto, emittente, scadenza, autofirmato);
   - HTTP in chiaro: metodo, host, percorso, user agent, codice di risposta.
 - **Inventario.** Da ARP, DHCP e mDNS ricava MAC, nome host, produttore e sistema operativo.
-- **Coda di invio.** Se l'hub non risponde, i dati restano in memoria (fino a `HW_MAX_PENDING` record) e ripartono con attese crescenti.
+- **Coda di invio.** I dati partono a lotti ogni 5 secondi. Se l'hub non risponde, in modalità cattura ogni lotto finisce in una coda su disco:
+  - un file per lotto, JSON compresso e cifrato con AES-256-GCM; la chiave deriva dal token del sensore (HKDF-SHA256), quindi chi copia la cartella senza il token non legge il traffico;
+  - scrittura atomica (file temporaneo, fsync, rename), cartella con permessi 700 (`/var/lib/hyperwave-sensor/coda` con systemd, altrimenti `HW_SPOOL_DIR`);
+  - limite di spazio `HW_SPOOL_MAX_MB` (2048): oltre si scartano i lotti più vecchi e si contano in `spool_dropped`;
+  - al ritorno dell'hub parte prima il lotto nuovo, poi la coda dal più vecchio, per al massimo 3 secondi a ogni giro, così i dati recenti non restano indietro;
+  - tra un tentativo e l'altro l'attesa cresce da 2 secondi a 1 minuto, e intanto i lotti vanno direttamente su disco;
+  - l'ultimo stato ricevuto dall'hub (live, reti interne) è salvato: se all'avvio l'hub non risponde, la cattura parte comunque.
+
+  Rinnovando il token, i lotti scritti con quello vecchio non si possono più leggere e vengono scartati. Senza coda su disco (`HW_SPOOL_DIR=off`, nessuna cartella di stato, modalità pcap e demo) i dati restano in memoria fino a `HW_MAX_PENDING` record.
 - **Contenuto dei pacchetti.** Non viene mai salvato.
 
 ### 2. Hub: ricezione e arricchimento
@@ -140,7 +148,8 @@ Le migrazioni stanno in `core/internal/store/{pg,ch}`. Sono incluse nel binario 
 
 - **Password.** Protette con scrypt (N=32768); lunghezza minima 12 caratteri; il nome utente non può comparire nella password.
 - **Sessioni.** Token casuale da 32 byte in un cookie `HttpOnly`, `Secure`, `SameSite=Lax`; nel database c'è solo l'hash. Durata massima 12 ore, chiusura dopo 60 minuti di inattività. Il cambio password chiude tutte le altre sessioni.
-- **Due fattori.** TOTP a 30 secondi. Lo stesso codice non vale due volte (`totp_last_step`). Gli 8 codici di recupero sono salvati come hash e valgono una volta sola.
+- **Due fattori.** TOTP a 30 secondi. Lo stesso codice non vale due volte (`totp_last_step`). I 10 codici di recupero sono salvati come hash e valgono una volta sola.
+- **Segreti 2FA cifrati.** Il segreto TOTP è cifrato nel database con AES-256-GCM e la chiave `HW_SECRET_KEY` di `.env`. Ogni valore è legato al suo utente: copiato su un altro utente non si decifra. Una copia del database senza `.env` non basta per generare i codici. Formato `enc:v1:<id chiave>:<dati>`; per la rotazione della chiave vedi docs/installazione.md.
 - **Tentativi.** Dopo 5 tentativi falliti per utente e indirizzo, oppure 20 per indirizzo, l'accesso si blocca per 15 minuti. Per non rivelare quali utenti esistono, il tempo di risposta è lo stesso anche per utenti inesistenti.
 
 **Permessi e dati**

@@ -28,7 +28,7 @@ Installate i pacchetti seguendo le guide ufficiali:
 
 Per compilare servono anche:
 
-- **Go** 1.24 o successivo (go.dev/dl);
+- **Go** 1.26 o successivo (go.dev/dl); se la versione patch è più vecchia di quella indicata in `core/go.mod` (`toolchain`), il comando `go` scarica da solo quella giusta;
 - **Node.js** 20 o successivo (nodesource o nvm).
 
 Facoltativo: i database **GeoLite2 City e ASN** di MaxMind, gratuiti con registrazione. Servono per il paese e l'operatore degli indirizzi esterni. Indicate il loro percorso in `HW_GEOIP_CITY` e `HW_GEOIP_ASN`.
@@ -163,7 +163,17 @@ server {
 }
 ```
 
-Sulla macchina del sensore:
+Sulla macchina del sensore il modo più semplice è il pacchetto del rilascio (Debian/Ubuntu, oppure `.rpm` per RHEL e derivate):
+
+```bash
+sudo apt install ./hyperwave-sensor_<versione>_amd64.deb   # oppure: sudo dnf install ./hyperwave-sensor-<versione>-1.x86_64.rpm
+sudo nano /etc/hyperwave/sensor.env                         # hub, token, interfaccia
+sudo systemctl enable --now hyperwave-sensor
+```
+
+Il pacchetto installa `/usr/bin/hw-sensor`, l'unità systemd e `/etc/hyperwave/sensor.env` (permessi 600, non viene sovrascritto dagli aggiornamenti). Aggiornando il pacchetto il sensore riparte da solo e la coda su disco resta.
+
+In alternativa, a mano:
 
 1. Copiate il binario: `install -m 755 hw-sensor /usr/local/bin/`.
 2. Create il token dalla pagina **Sensori** e salvatelo in `/etc/hyperwave/sensor.env` (permessi 600):
@@ -180,7 +190,7 @@ Sulla macchina del sensore:
 
 L'unità gira senza privilegi di root: ha solo `CAP_NET_RAW` e `CAP_NET_ADMIN`.
 
-Se l'hub non risponde, il sensore tiene i dati in memoria fino a `HW_MAX_PENDING` record e li invia quando la connessione torna.
+Se l'hub non risponde, il sensore salva i lotti in una coda cifrata su disco (`/var/lib/hyperwave-sensor/coda`, al massimo `HW_SPOOL_MAX_MB` MB, predefinito 2048) e li invia quando la connessione torna, anche dopo un riavvio. La pagina **Sensori** mostra i record e i byte in coda e quelli scartati per mancanza di spazio: dopo una prima interruzione si vede quanto spazio serve al vostro traffico.
 
 ### Suricata (facoltativo)
 
@@ -203,13 +213,45 @@ deploy/build.sh
 sudo systemctl restart hyperwave-hub hyperwave-web   # oppure: pm2 restart hyperwave-hub hyperwave-web
 ```
 
-Le migrazioni dei database si applicano da sole all'avvio dell'hub. I sensori remoti vanno aggiornati con il nuovo binario. Il formato dei dati resta compatibile all'interno della stessa versione principale.
+Le migrazioni dei database si applicano da sole all'avvio dell'hub. I sensori remoti vanno aggiornati con il nuovo binario o pacchetto. Il formato dei dati resta compatibile all'interno della stessa versione principale.
+
+Aggiornando da una versione senza cifratura dei segreti 2FA, rilanciate `sudo deploy/setup.sh`: aggiunge `HW_SECRET_KEY` a `.env` senza toccare il resto. Poi, dopo il riavvio:
+
+```bash
+cd web && npm run utente -- cifra-segreti
+```
+
+I segreti ancora in chiaro funzionano comunque e vengono cifrati al primo accesso di ciascun utente; il comando lo fa subito per tutti. **Impostazioni → Stato dei componenti → Segreti 2FA** mostra se ne resta qualcuno in chiaro.
+
+### Rotazione della chiave dei segreti
+
+1. In `.env` spostate la chiave attuale in `HW_SECRET_KEY_OLD` e mettete in `HW_SECRET_KEY` quella nuova (`openssl rand -hex 32`).
+2. Riavviate l'interfaccia web.
+3. `cd web && npm run utente -- cifra-segreti`: ricifra tutto con la chiave nuova.
+4. Togliete `HW_SECRET_KEY_OLD` e riavviate di nuovo.
+
+Una chiave persa non si recupera: gli utenti interessati vanno sbloccati con `npm run utente -- togli-2fa <nome>` e riattivano i due fattori da **Account**.
+
+### Verificare un rilascio
+
+Ogni rilascio su GitHub contiene `SHA256SUMS`, la sua firma Sigstore (`SHA256SUMS.sigstore.json`, creata dal workflow senza chiavi private) e l'SBOM in formato SPDX. Prima di installare:
+
+```bash
+cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/TumasDevelopment/Hyperwave/\.github/workflows/release\.yml@refs/tags/v'
+sha256sum -c SHA256SUMS --ignore-missing
+# in alternativa, con la CLI di GitHub:
+gh attestation verify hyperwave-sensor_<versione>_amd64.deb -R TumasDevelopment/Hyperwave
+```
+
+L'archivio `hyperwave-<versione>-linux-<arch>-completo.tar.gz` contiene i sorgenti e i binari già compilati: sul server dell'hub basta Node.js, `deploy/build.sh` usa i binari presenti se Go non è installato.
 
 ## 8. Backup
 
 | Cosa | Come | Note |
 |---|---|---|
-| `.env` | copia del file | contiene i segreti: conservatelo cifrato |
+| `.env` | copia del file | contiene i segreti, compresa `HW_SECRET_KEY`: senza, il backup di PostgreSQL non basta per i due fattori. Conservatelo cifrato e separato dal dump |
 | PostgreSQL | `pg_dump -Fc hyperwave > hyperwave.dump` | inventario, allarmi, regole, utenti: è la parte preziosa |
 | ClickHouse | `BACKUP DATABASE hyperwave TO Disk('backups', 'hw.zip')` | flussi: grandi, spesso basta conservarne gli ultimi giorni |
 

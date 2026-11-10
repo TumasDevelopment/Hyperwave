@@ -20,11 +20,9 @@ Legenda:
 
 | Limite | Effetto | Soluzione prevista |
 |---|---|---|
-| Il sensore tiene in coda i dati solo in memoria | se il sensore si riavvia mentre l'hub è irraggiungibile, i dati in coda si perdono | spool su disco (P1) |
-| Il segreto TOTP è salvato in chiaro in PostgreSQL | chi legge il database può generare i codici | cifratura a riposo (P1) |
 | Il blocco dei tentativi di accesso è in memoria | si azzera al riavvio; non funziona con più istanze dell'interfaccia | spostarlo in PostgreSQL insieme all'HA (P1) |
 | Nessuna notifica verso l'esterno | gli allarmi si vedono solo nell'interfaccia e via API | canali da scegliere (P1, vedi sotto) |
-| L'interfaccia non ha test automatici | le regressioni si scoprono a mano | test e CI (P1) |
+| I test coprono funzioni e moduli, non i percorsi completi | un errore nell'integrazione tra pagine, hub e basi di dati si scopre a mano | Playwright e test di integrazione in container (P1) |
 | La pagina Flussi carica fino a 500 righe in una volta | pagine pesanti su connessioni lente | paginazione a cursore (P2) |
 | L'API non ha limiti di frequenza né una specifica OpenAPI | un token può sovraccaricare ClickHouse | limiti per token e `openapi.yaml` (P1) |
 | `anomaly_volume` richiede `HW_LEARNING_HOURS` di storico | sulle installazioni nuove non scatta per il primo giorno | comportamento voluto, da indicare nell'interfaccia |
@@ -60,7 +58,7 @@ Sforzo M.
 Sforzo M.
 
 ### Sicurezza dei dati
-- **Segreti TOTP.** Cifrati con AES-GCM, chiave in `.env` oppure in un KMS o Vault, con rotazione.
+- ~~**Segreti TOTP.** Cifrati con AES-GCM, chiave in `.env`, con rotazione.~~ Fatto (novembre 2026). Resta: chiave in un KMS o in Vault.
 - **Sensori.** mTLS tra sensore e hub, in alternativa o in aggiunta al token, con certificati emessi dall'hub e revocabili.
 - **Registro delle attività.** A prova di manomissione: catena di hash tra le righe ed export firmato.
 - **Token API.** Limiti di frequenza, ambiti (solo allarmi, solo dispositivi), restrizione per indirizzo IP.
@@ -68,7 +66,7 @@ Sforzo M.
 Sforzo M.
 
 ### Affidabilità del sensore
-- Spool su disco cifrato, con un limite di spazio e scarto dei dati più vecchi.
+- ~~Spool su disco cifrato, con un limite di spazio e scarto dei dati più vecchi.~~ Fatto (novembre 2026).
 - Configurazione remota dall'hub: interfacce, reti da ignorare, livello di log.
 - Aggiornamento automatico firmato.
 - Metriche di salute: CPU, memoria, perdite per interfaccia, ritardo di invio.
@@ -84,9 +82,9 @@ Sforzo M.
 Sforzo L.
 
 ### Qualità e distribuzione
-- **Test.** Unitari sull'interfaccia (azioni, permessi), end-to-end con Playwright, integrazione hub↔ClickHouse in container.
-- **CI.** GitHub Actions con lint, test, build, analisi delle dipendenze (govulncheck, npm audit) e SBOM.
-- **Rilasci.** Firmati (cosign), pacchetti `.deb` per hub e sensore, immagini container, Helm chart.
+- **Test.** Fatti: unitari su hub, sensore (coda su disco compresa), crittografia e 2FA dell'interfaccia. Restano: azioni e permessi dell'interfaccia, end-to-end con Playwright, integrazione hub↔ClickHouse in container.
+- ~~**CI.** GitHub Actions con lint, test, build, analisi delle dipendenze (govulncheck, npm audit) e SBOM.~~ Fatto (novembre 2026), con aggiornamenti delle dipendenze da Dependabot.
+- **Rilasci.** Fatti: firmati con Sigstore, attestazione di provenienza, SBOM, pacchetti `.deb` e `.rpm` del sensore, archivio completo con i binari. Restano: immagini container, Helm chart, repository apt.
 - **Monitoraggio di Hyperwave stesso.** Endpoint `/metrics` in formato Prometheus per hub e sensore, con dashboard Grafana di esempio.
 
 Sforzo M.
@@ -149,13 +147,13 @@ Sforzo M.
 
 ## Ordine consigliato
 
+Fatti a novembre 2026: cifratura dei segreti TOTP, coda su disco del sensore, test, CI e rilasci firmati.
+
 1. Notifiche, dopo la scelta dei canali.
-2. Cifratura dei segreti TOTP.
-3. Spool su disco del sensore.
-4. Test e CI.
-5. SSO.
-6. Metriche Prometheus.
-7. Limiti di frequenza dell'API e specifica OpenAPI.
-8. QUIC e threat intelligence: i due miglioramenti di rilevamento con il miglior rapporto tra valore e sforzo.
-9. PCAP su richiesta e rapporti PDF.
-10. Alta disponibilità, quando un cliente supera una sede o 1 Gbit/s.
+2. SSO.
+3. Metriche Prometheus.
+4. Limiti di frequenza dell'API e specifica OpenAPI.
+5. Test end-to-end e di integrazione.
+6. QUIC e threat intelligence: i due miglioramenti di rilevamento con il miglior rapporto tra valore e sforzo.
+7. PCAP su richiesta e rapporti PDF.
+8. Alta disponibilità, quando un cliente supera una sede o 1 Gbit/s.
