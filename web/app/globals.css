@@ -1576,3 +1576,54 @@ pre {
   border-radius: var(--radius-s);
   color: var(--text);
 }
+
+/* Incidenti */
+.status--inc-open {
+  color: var(--bad);
+  background: var(--bad-bg);
+}
+.status--inc-investigating {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+.status--inc-contained {
+  color: var(--violet);
+  background: rgb(167 139 250 / 0.13);
+}
+.status--inc-closed {
+  color: var(--ok);
+  background: var(--ok-bg);
+}
+.timeline--system::before {
+  border-color: var(--muted) !important;
+}
+.chain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+.chain__step {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--radius-s);
+  color: var(--muted);
+  min-width: 0;
+}
+.chain__step--on {
+  border: 1px solid var(--bad);
+  background: var(--bad-bg);
+  color: var(--text);
+}
+.chain__label {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.chain__tech {
+  overflow-wrap: anywhere;
+}

@@ -8,10 +8,14 @@ import { db, setting } from "@/lib/db";
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const user = await requireUser({ allowMustChange: true });
-  const [live, open] = await Promise.all([
+  const [live, open, incidents] = await Promise.all([
     setting<boolean>("live", true).catch(() => true),
     db()
       .query<{ n: number }>("SELECT count(*)::int AS n FROM alerts WHERE status = 'open'")
+      .then((r) => r.rows[0]?.n ?? 0)
+      .catch(() => 0),
+    db()
+      .query<{ n: number }>("SELECT count(*)::int AS n FROM incidents WHERE status = 'open'")
       .then((r) => r.rows[0]?.n ?? 0)
       .catch(() => 0),
   ]);
@@ -24,6 +28,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         { href: "/flussi", label: "Flussi", icon: "flows" },
         { href: "/dispositivi", label: "Dispositivi", icon: "devices" },
         { href: "/allarmi", label: "Allarmi", icon: "alerts", badge: open },
+        { href: "/incidenti", label: "Incidenti", icon: "incidents", badge: incidents },
         { href: "/minacce", label: "Minacce note", icon: "intel" },
         { href: "/analisi", label: "Analisi", icon: "analysis" },
         { href: "/regole", label: "Regole", icon: "rules" },

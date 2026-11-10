@@ -26,6 +26,7 @@ export interface AlertRow {
   resolved_by: string;
   resolved_at: Date | null;
   resolution: string;
+  incident_id: number | null;
 }
 
 export interface AlertFilter {
@@ -41,7 +42,8 @@ const SELECT = `
   SELECT a.id::int AS id, a.rule, coalesce(c.name, a.rule) AS rule_name, coalesce(c.category, '') AS category,
          a.severity, a.title, a.summary, a.src_ip, a.dst_ip, a.device_id::int AS device_id,
          coalesce(nullif(d.name, ''), nullif(d.hostname, ''), '') AS device_name, coalesce(s.name, '') AS sensor,
-         a.mitre, a.detail, a.first_seen, a.last_seen, a.count, a.status, a.assignee, a.resolved_by, a.resolved_at, a.resolution
+         a.mitre, a.detail, a.first_seen, a.last_seen, a.count, a.status, a.assignee, a.resolved_by, a.resolved_at, a.resolution,
+         a.incident_id::int AS incident_id
   FROM alerts a
   LEFT JOIN rule_catalog c ON c.id = a.rule
   LEFT JOIN devices d ON d.id = a.device_id
@@ -81,6 +83,12 @@ export async function alertCounts() {
             count(*) FILTER (WHERE first_seen > now() - interval '24 hours')::int AS today
      FROM alerts GROUP BY severity`,
   );
+  return rows;
+}
+
+/** Allarmi di un incidente, dal primo al più recente. */
+export async function incidentAlerts(incidentId: number): Promise<AlertRow[]> {
+  const { rows } = await db().query<AlertRow>(`${SELECT} WHERE a.incident_id = $1 ORDER BY a.first_seen, a.id LIMIT 1000`, [incidentId]);
   return rows;
 }
 

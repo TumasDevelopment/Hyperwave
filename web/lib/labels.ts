@@ -17,6 +17,13 @@ export const STATUS_LABELS: Record<string, string> = {
   resolved: "Risolto",
 };
 
+export const INCIDENT_STATUS_LABELS: Record<string, string> = {
+  open: "Aperto",
+  investigating: "In indagine",
+  contained: "Contenuto",
+  closed: "Chiuso",
+};
+
 export const RESOLUTIONS: Record<string, string> = {
   true_positive: "Minaccia confermata e gestita",
   benign: "Attività legittima",

@@ -86,6 +86,12 @@ export default async function AlertPage({ params }: Props) {
         sub={
           <>
             <Link href="/allarmi">Allarmi</Link> · n. {a.id} · {a.rule_name}
+            {a.incident_id && (
+              <>
+                {" "}
+                · fa parte dell&apos;<Link href={`/incidenti/${a.incident_id}`}>incidente n. {a.incident_id}</Link>
+              </>
+            )}
           </>
         }
       >

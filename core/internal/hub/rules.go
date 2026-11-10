@@ -13,7 +13,7 @@ import (
 
 // catalog elenca tutte le regole. Gli ID non vanno cambiati: sono salvati negli allarmi.
 func catalog() []*RuleDef {
-	return append(append(baseCatalog(), protoCatalog()...), intelCatalog()...)
+	return slices.Concat(baseCatalog(), protoCatalog(), intelCatalog(), incidentCatalog())
 }
 
 func baseCatalog() []*RuleDef {

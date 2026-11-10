@@ -265,6 +265,7 @@ func (h *Hub) Run(ctx context.Context) error {
 	every("eccezioni", 60*time.Second, func(ctx context.Context) error { return h.supp.load(ctx, h.pg) })
 	every("minacce", 5*time.Minute, h.intel.tick)
 	every("minacce-allarmi", 30*time.Second, h.intel.flushHits)
+	every("incidenti", 60*time.Second, h.correlate)
 	every("pulizia", time.Hour, h.cleanup)
 	if h.cfg.VigilURL != "" {
 		every("vigil", 30*time.Second, h.checkVigil)
@@ -292,6 +293,7 @@ func (h *Hub) cleanup(ctx context.Context) error {
 	}{
 		{"DELETE FROM sessions WHERE expires_at < now()", nil},
 		{"DELETE FROM alerts WHERE status = 'resolved' AND resolved_at < now() - make_interval(days => $1)", []any{h.cfg.AlertRetention}},
+		{"DELETE FROM incidents WHERE status = 'closed' AND closed_at < now() - make_interval(days => $1)", []any{h.cfg.AlertRetention}},
 		{"DELETE FROM audit_log WHERE ts < now() - make_interval(days => $1)", []any{h.cfg.AuditRetention}},
 		{"DELETE FROM suppressions WHERE expires_at < now() - interval '30 days'", nil},
 		{"DELETE FROM intel_indicators WHERE expires_at < now() - interval '1 day'", nil},
