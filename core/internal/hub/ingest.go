@@ -399,6 +399,7 @@ func (h *Hub) store(ctx context.Context, s *Sensor, b *model.Batch) (n int, maxT
 	h.ingest.batches.Add(1)
 	h.ingest.records.Add(int64(n))
 
+	h.intel.scan(s, b)
 	h.inv.add(s, b, nets)
 	if minTS > 0 {
 		h.eng.lateData(minTS)

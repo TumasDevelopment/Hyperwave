@@ -24,6 +24,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         { href: "/flussi", label: "Flussi", icon: "flows" },
         { href: "/dispositivi", label: "Dispositivi", icon: "devices" },
         { href: "/allarmi", label: "Allarmi", icon: "alerts", badge: open },
+        { href: "/minacce", label: "Minacce note", icon: "intel" },
         { href: "/analisi", label: "Analisi", icon: "analysis" },
         { href: "/regole", label: "Regole", icon: "rules" },
         { href: "/sensori", label: "Sensori", icon: "sensors" },

@@ -163,6 +163,13 @@ hr {
   align-items: center;
   gap: 8px;
 }
+.row .grow {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.input--narrow {
+  width: 5.5em;
+}
 .grid-2,
 .grid-3 {
   display: grid;

@@ -24,13 +24,14 @@ export function nats(): Promise<NatsConnection> {
 }
 
 /**
- * Avvisa l'hub che qualcosa è cambiato: "settings" (live e configurazione), "rules", "sensors".
+ * Avvisa l'hub che qualcosa è cambiato: "settings" (live e configurazione), "rules", "sensors",
+ * "intel" (elenchi di minaccia, con un comando facoltativo: {fetch: id} o {retro: id}).
  * Se NATS non risponde non è grave: l'hub rilegge comunque le impostazioni ogni pochi secondi.
  */
-export async function notifyHub(what: "settings" | "rules" | "sensors") {
+export async function notifyHub(what: "settings" | "rules" | "sensors" | "intel", payload?: Record<string, unknown>) {
   try {
     const nc = await nats();
-    nc.publish(`hw.control.${what}`);
+    nc.publish(`hw.control.${what}`, payload ? new TextEncoder().encode(JSON.stringify(payload)) : undefined);
     await nc.flush();
   } catch (error) {
     console.error("Avviso all'hub non inviato:", (error as Error).message);

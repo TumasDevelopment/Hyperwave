@@ -85,6 +85,7 @@ type Hub struct {
 	live   *livePublisher
 	auth   *sensorAuth
 	supp   *suppressions
+	intel  *intel
 	marks  sync.Map // sensorID → *watermark (avanzamento del backfill)
 	start  time.Time
 	ingest ingestStats
@@ -133,6 +134,13 @@ func Connect(ctx context.Context, cfg Config, log *slog.Logger) (*Hub, error) {
 	if err := h.eng.syncCatalog(ctx); err != nil {
 		return nil, err
 	}
+	h.intel = newIntel(h)
+	if err := h.intel.syncPresets(ctx); err != nil {
+		return nil, fmt.Errorf("elenchi di minaccia: %w", err)
+	}
+	if err := h.intel.load(ctx); err != nil {
+		return nil, fmt.Errorf("elenchi di minaccia: %w", err)
+	}
 
 	// NATS serve solo alla parte live: se non c'è, l'hub lavora lo stesso e riprova da solo.
 	opts := []nats.Option{
@@ -180,6 +188,8 @@ func (h *Hub) Run(ctx context.Context) error {
 		case "hw.control.rules":
 			h.eng.reloadRules(rctx)
 			h.supp.load(rctx, h.pg)
+		case "hw.control.intel":
+			h.intel.control(rctx, m.Data)
 		default:
 			if err := h.state.reload(rctx, h.pg); err != nil {
 				h.log.Warn("rilettura impostazioni", "err", err)
@@ -237,6 +247,8 @@ func (h *Hub) Run(ctx context.Context) error {
 	every("sensori", 20*time.Second, h.checkSensors)
 	every("nomi", 60*time.Second, func(ctx context.Context) error { return h.enr.refreshNames(ctx, h.pg) })
 	every("eccezioni", 60*time.Second, func(ctx context.Context) error { return h.supp.load(ctx, h.pg) })
+	every("minacce", 5*time.Minute, h.intel.tick)
+	every("minacce-allarmi", 30*time.Second, h.intel.flushHits)
 	every("pulizia", time.Hour, h.cleanup)
 	if h.cfg.VigilURL != "" {
 		every("vigil", 30*time.Second, h.checkVigil)
@@ -266,6 +278,7 @@ func (h *Hub) cleanup(ctx context.Context) error {
 		{"DELETE FROM alerts WHERE status = 'resolved' AND resolved_at < now() - make_interval(days => $1)", []any{h.cfg.AlertRetention}},
 		{"DELETE FROM audit_log WHERE ts < now() - make_interval(days => $1)", []any{h.cfg.AuditRetention}},
 		{"DELETE FROM suppressions WHERE expires_at < now() - interval '30 days'", nil},
+		{"DELETE FROM intel_indicators WHERE expires_at < now() - interval '1 day'", nil},
 		{"DELETE FROM device_services WHERE last_seen < now() - make_interval(days => $1)", []any{h.cfg.AggRetentionDays}},
 	}
 	for _, s := range stmts {
