@@ -1,0 +1,122 @@
+# Rilascio: si avvia pubblicando un tag vX.Y.Z (per esempio  git tag -a v1.1.0 -m "Hyperwave 1.1.0" && git push origin v1.1.0).
+#
+# Produce, per linux amd64 e arm64:
+#   hyperwave-<versione>-linux-<arch>.tar.gz            binari hw-hub e hw-sensor
+#   hyperwave-<versione>-linux-<arch>-completo.tar.gz   sorgenti + binari già compilati (sul server basta Node)
+#   hyperwave-sensor_<versione>_<arch>.deb / .rpm       pacchetto del sensore con unità systemd
+# più l'SBOM (SPDX), SHA256SUMS firmato con Sigstore (cosign, senza chiavi) e l'attestazione di
+# provenienza di GitHub. Come verificare: docs/installazione.md, sezione "Verificare un rilascio".
+name: Rilascio
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write      # pubblicare il rilascio
+  id-token: write      # firma Sigstore senza chiavi (identità OIDC del workflow)
+  attestations: write  # attestazione di provenienza
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Versione
+        id: v
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "Tag non valido: $tag (atteso vX.Y.Z)"; exit 1; }
+          echo "version=${tag#v}" >>"$GITHUB_OUTPUT"
+
+      - name: Test
+        run: |
+          (cd core && go vet ./... && go test -race -count=1 ./... && go run golang.org/x/vuln/cmd/govulncheck@latest ./...)
+          (cd web && npm ci --no-audit --no-fund && npm run typecheck && npm test && npm run build)
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+      - name: Compilazione e archivi
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          git archive --format=tar --prefix="hyperwave-$VERSION/" HEAD >"$RUNNER_TEMP/sorgenti.tar"
+          for arch in amd64 arm64; do
+            (cd core && GOOS=linux GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
+              -ldflags "-s -w -X hyperwave/internal/version.Version=$GITHUB_REF_NAME" -o "../dist/$arch/" ./cmd/...)
+            tar -czf "dist/hyperwave-$VERSION-linux-$arch.tar.gz" --owner=0 --group=0 \
+              -C "dist/$arch" hw-hub hw-sensor -C "$GITHUB_WORKSPACE" LICENSE README.md
+            stage="$RUNNER_TEMP/stage-$arch"
+            mkdir -p "$stage/hyperwave-$VERSION/core/bin"
+            cp "dist/$arch/hw-hub" "dist/$arch/hw-sensor" "$stage/hyperwave-$VERSION/core/bin/"
+            cp "$RUNNER_TEMP/sorgenti.tar" "$RUNNER_TEMP/completo-$arch.tar"
+            tar -rf "$RUNNER_TEMP/completo-$arch.tar" --owner=0 --group=0 -C "$stage" "hyperwave-$VERSION/core/bin"
+            gzip -9n <"$RUNNER_TEMP/completo-$arch.tar" >"dist/hyperwave-$VERSION-linux-$arch-completo.tar.gz"
+          done
+
+      - name: Pacchetti del sensore (deb, rpm)
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          mkdir -p dist/pkg
+          sed 's#/usr/local/bin/hw-sensor#/usr/bin/hw-sensor#' deploy/systemd/hyperwave-sensor.service >dist/pkg/hyperwave-sensor.service
+          for arch in amd64 arm64; do
+            cp "dist/$arch/hw-sensor" dist/pkg/hw-sensor
+            for fmt in deb rpm; do
+              GOARCH=$arch VERSION=$VERSION "$(go env GOPATH)/bin/nfpm" package -f deploy/nfpm/hyperwave-sensor.yaml -p $fmt -t dist/
+            done
+          done
+          rm -rf dist/pkg
+
+      - name: SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/hyperwave-${{ steps.v.outputs.version }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Somme di controllo
+        run: |
+          cd dist
+          rm -rf amd64 arm64
+          sha256sum -- *.tar.gz *.deb *.rpm *.spdx.json >SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: sigstore/cosign-installer@v3
+      - name: Firma (Sigstore, senza chiavi)
+        run: cosign sign-blob --yes --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
+
+      - name: Attestazione di provenienza
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+
+      - name: Pubblicazione
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""
+          [[ "$GITHUB_REF_NAME" == *-* ]] && pre="--prerelease"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes $pre \
+            --title "Hyperwave $GITHUB_REF_NAME" dist/*

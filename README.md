@@ -1,5 +1,7 @@
 # Hyperwave
 
+[![CI](https://github.com/TumasDevelopment/Hyperwave/actions/workflows/ci.yml/badge.svg)](https://github.com/TumasDevelopment/Hyperwave/actions/workflows/ci.yml)
+
 Hyperwave monitora la rete aziendale: mostra chi parla con chi, quanto, con quale protocollo, e cosa c'è di strano.
 
 Il sistema ha tre parti:
@@ -94,9 +96,12 @@ La guida completa, con proxy HTTPS, sensori remoti e aggiornamenti, è in [docs/
 - **Accesso.**
   - Password protette con scrypt.
   - Sessioni con scadenza e chiusura per inattività.
-  - Due fattori TOTP con codici di recupero.
+  - Due fattori TOTP con codici di recupero; il segreto è cifrato nel database (AES-256-GCM, chiave in `.env`).
   - Blocco dopo troppi tentativi falliti.
 - **Token.** I token dei sensori e dell'API sono salvati solo come hash e vengono mostrati una volta sola.
+- **Coda del sensore.** I dati in attesa dell'hub sono cifrati su disco con una chiave derivata dal token del sensore.
+- **Rilasci.** Firmati con Sigstore, con attestazione di provenienza e SBOM. Ogni modifica passa da test, analisi statica e controllo delle vulnerabilità note.
+- **Segnalazioni.** Vedi [SECURITY.md](SECURITY.md).
 - **ClickHouse.** L'interfaccia lo usa in sola lettura (readonly=2) e con query sempre parametrizzate.
 - **Registro.** Ogni modifica finisce nel registro delle attività, che si può esportare.
 - **Dati raccolti.** Il sensore non salva il contenuto dei pacchetti: solo intestazioni e metadati.

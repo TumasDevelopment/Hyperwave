@@ -1,0 +1,81 @@
+# Controlli a ogni push su main e a ogni pull request: formattazione, analisi statica,
+# test (con il rilevatore di race), compilazione per amd64 e arm64, vulnerabilità note.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Hub e sensore (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+      - name: Formattazione (gofmt)
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "File da formattare con gofmt:"; echo "$out"; exit 1; fi
+      - name: Analisi statica (go vet)
+        run: go vet ./...
+      - name: Test
+        run: go test -race -count=1 ./...
+      - name: Compilazione linux amd64 e arm64
+        run: |
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH=$arch CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/bin-$arch/" ./cmd/...
+          done
+          ls -l "$RUNNER_TEMP"/bin-*
+      - name: Vulnerabilità note (govulncheck)
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  web:
+    name: Interfaccia web (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Controllo dei tipi
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      - name: Compilazione
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+      - name: Vulnerabilità note nelle dipendenze
+        run: npm audit --omit=dev --audit-level=high
+
+  script:
+    name: Script di installazione
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Sintassi bash
+        run: for f in deploy/*.sh deploy/nfpm/*.sh; do bash -n "$f"; done
+      - name: ShellCheck (solo errori)
+        run: shellcheck -S error deploy/*.sh deploy/nfpm/*.sh

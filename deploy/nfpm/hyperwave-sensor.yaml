@@ -1,0 +1,40 @@
+# Pacchetto deb/rpm del sensore, costruito da .github/workflows/release.yml con nfpm.
+# Variabili: GOARCH (amd64, arm64) e VERSION (senza la "v" iniziale).
+name: hyperwave-sensor
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+version_schema: semver
+section: net
+priority: optional
+maintainer: Tumas Development <info@tumas.net>
+vendor: Tumas Development
+homepage: https://github.com/TumasDevelopment/Hyperwave
+license: AGPL-3.0-only
+description: |
+  Sensore di rete di Hyperwave.
+  Osserva il traffico da una porta SPAN o da un TAP, ne ricava flussi, DNS, TLS e HTTP
+  e li invia all'hub. Se l'hub non è raggiungibile conserva i dati in una coda cifrata su disco.
+
+contents:
+  - src: ./dist/pkg/hw-sensor # il workflow ci copia il binario dell'architettura in costruzione
+    dst: /usr/bin/hw-sensor
+    file_info:
+      mode: 0755
+  - src: ./dist/pkg/hyperwave-sensor.service
+    dst: /usr/lib/systemd/system/hyperwave-sensor.service
+    file_info:
+      mode: 0644
+  - src: ./deploy/nfpm/sensor.env
+    dst: /etc/hyperwave/sensor.env
+    type: config|noreplace
+    file_info:
+      mode: 0600
+  - dst: /etc/hyperwave
+    type: dir
+    file_info:
+      mode: 0755
+
+scripts:
+  postinstall: ./deploy/nfpm/sensor-postinstall.sh
+  preremove: ./deploy/nfpm/sensor-preremove.sh
