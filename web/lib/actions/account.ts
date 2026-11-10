@@ -7,6 +7,7 @@ import { db } from "../db";
 import { failure, text, type FormState } from "../form";
 import { hashPassword, verifyPassword } from "../password.mjs";
 import { passwordProblem } from "../secrets";
+import { openSecret, sealSecret, totpContext } from "../secretbox.mjs";
 import { hashRecoveryCode, newRecoveryCodes, newTotpSecret, otpauthUri, verifyTotp } from "../totp.mjs";
 
 async function checkPassword(userId: number, password: string) {
@@ -45,7 +46,11 @@ export async function startTotp(): Promise<FormState> {
   try {
     const user = await actionUser();
     const secret = newTotpSecret();
-    const res = await db().query("UPDATE users SET totp_secret = $2 WHERE id = $1 AND NOT totp_enabled", [user.id, secret]);
+    // nel database solo cifrato: senza HW_SECRET_KEY sealSecret si ferma con un messaggio chiaro
+    const res = await db().query("UPDATE users SET totp_secret = $2 WHERE id = $1 AND NOT totp_enabled", [
+      user.id,
+      sealSecret(secret, totpContext(user.id)),
+    ]);
     if (!res.rowCount) return { error: "I due fattori sono già attivi." };
     return { ok: true, data: { secret, uri: otpauthUri({ issuer: "Hyperwave", account: user.username, secret }) } };
   } catch (error) {
@@ -60,8 +65,9 @@ export async function confirmTotp(_state: FormState, form: FormData): Promise<Fo
       "SELECT totp_secret FROM users WHERE id = $1 AND NOT totp_enabled",
       [user.id],
     );
-    const secret = rows[0]?.totp_secret;
-    if (!secret) return { error: "Riparti dall'inizio: genera un nuovo codice QR." };
+    const stored = rows[0]?.totp_secret;
+    if (!stored) return { error: "Riparti dall'inizio: genera un nuovo codice QR." };
+    const secret = openSecret(stored, totpContext(user.id)).value;
     const step = verifyTotp(secret, text(form, "code", 20), Date.now() / 1000);
     if (step === null) return { error: "Codice non corretto: controlla che l'ora del telefono sia giusta e riprova." };
     const codes = newRecoveryCodes(10);

@@ -60,6 +60,8 @@ HW_WEB_HOST=127.0.0.1
 HW_WEB_PORT=3120
 HW_INTERNAL_NETS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7
 HW_RETENTION_DAYS=30
+# cifra i segreti dei due fattori nel database: senza questa chiave un backup del DB non basta a usarli
+HW_SECRET_KEY=$(rand 32)
 HW_GEOIP_CITY=
 HW_GEOIP_ASN=
 VIGIL_URL=
@@ -70,6 +72,11 @@ EOF
   echo "    creato $ENV_FILE (permessi 600)"
 else
   echo "    $ENV_FILE esiste già: lo riuso"
+  # installazioni precedenti alla cifratura dei segreti: si aggiunge la chiave senza toccare il resto
+  if ! grep -qE '^HW_SECRET_KEY=.+' "$ENV_FILE"; then
+    echo "HW_SECRET_KEY=$(rand 32)" >>"$ENV_FILE"
+    echo "    aggiunta HW_SECRET_KEY (poi: cd web && npm run utente -- cifra-segreti)"
+  fi
 fi
 
 # ---------------------------------------------------------------- PostgreSQL

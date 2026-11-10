@@ -4,7 +4,8 @@ import { Badge, Card, Field, LoadError, PageHead, safe, Tabs } from "@/component
 import { saveNetworkConfig, setLive } from "@/lib/actions/admin";
 import { requireRole } from "@/lib/auth";
 import { fmtAgo, fmtBytes, fmtDateTime, fmtDuration, fmtNum } from "@/lib/format";
-import { hubHealth, pgSize, storageUsage, systemSettings } from "@/lib/queries/system";
+import { hubHealth, pgSize, secretStatus, storageUsage, systemSettings } from "@/lib/queries/system";
+import { hasSecretKey } from "@/lib/secretbox.mjs";
 import { SETTINGS_TABS } from "@/lib/settings-tabs";
 
 export const metadata = { title: "Impostazioni" };
@@ -23,11 +24,12 @@ const TABLE_LABELS: Record<string, string> = {
 
 export default async function SettingsPage() {
   await requireRole("admin");
-  const [settings, health, storage, pg] = await Promise.all([
+  const [settings, health, storage, pg, secrets] = await Promise.all([
     systemSettings(),
     hubHealth(),
     safe(storageUsage(), [], "spazio ClickHouse"),
     pgSize().catch(() => 0),
+    secretStatus().catch(() => ({ key: hasSecretKey(), total: 0, plain: 0 })),
   ]);
   const { live, config, vigil, cursor, liveChanged } = settings;
   const lag = cursor ? (Date.now() - cursor) / 1000 : null;
@@ -46,7 +48,7 @@ export default async function SettingsPage() {
             {live ? <Badge tone="ok">Acceso</Badge> : <Badge tone="warn">Spento</Badge>}{" "}
             {live
               ? "I sensori inviano i dati e il motore cerca le minacce."
-              : "I sensori non inviano dati e il motore è fermo. Alla riaccensione i sensori di esempio recuperano il periodo perso."}
+              : "L'hub scarta i dati in arrivo e il motore è fermo: il traffico di questo periodo non viene registrato."}
           </p>
           {liveChanged?.updated_by && (
             <p className="muted small">
@@ -99,6 +101,23 @@ export default async function SettingsPage() {
                 ) : (
                   <>
                     <Badge tone="warn">In ritardo</Badge> <span className="muted small">{fmtDuration(lag)} indietro</span>
+                  </>
+                )}
+              </dd>
+              <dt>Segreti 2FA</dt>
+              <dd>
+                {!secrets.key ? (
+                  <>
+                    <Badge tone="bad">Chiave mancante</Badge> <span className="muted small">aggiungi HW_SECRET_KEY in .env</span>
+                  </>
+                ) : secrets.plain > 0 ? (
+                  <>
+                    <Badge tone="warn">{fmtNum(secrets.plain)} in chiaro</Badge>{" "}
+                    <span className="muted small">npm run utente -- cifra-segreti</span>
+                  </>
+                ) : (
+                  <>
+                    <Badge tone="ok">Cifrati</Badge> <span className="muted small">{fmtNum(secrets.total)} con 2FA attivi</span>
                   </>
                 )}
               </dd>

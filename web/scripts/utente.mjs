@@ -6,6 +6,7 @@
 //   npm run utente -- sblocca <nome>                          riattiva un utente disattivato
 //   npm run utente -- togli-2fa <nome>                        disattiva i due fattori (telefono perso)
 //   npm run utente -- elenco
+//   npm run utente -- cifra-segreti                           cifra i segreti 2FA (dopo l'aggiornamento o un cambio di chiave)
 //
 // Senza --genera-in la password va in ./password-<nome>.txt (permessi 600). Al primo accesso va cambiata.
 import { randomInt } from "node:crypto";
@@ -13,6 +14,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import pg from "pg";
 import { hashPassword } from "../lib/password.mjs";
+import { hasSecretKey, openSecret, sealSecret, totpContext } from "../lib/secretbox.mjs";
 
 for (const file of [".env", "../.env"]) {
   if (existsSync(file)) process.loadEnvFile(file);
@@ -57,7 +59,7 @@ async function main() {
   const [command, username, ...rest] = process.argv.slice(2);
   if (!process.env.DATABASE_URL) fail("DATABASE_URL non impostata: esegui il comando dalla cartella web con ../.env presente.");
   if (!command || command === "aiuto" || command === "--help") {
-    console.log("Uso: utente aggiungi|reimposta|sblocca|togli-2fa <nome> [--ruolo R] [--genera-in FILE] · utente elenco");
+    console.log("Uso: utente aggiungi|reimposta|sblocca|togli-2fa <nome> [--ruolo R] [--genera-in FILE] · utente elenco · utente cifra-segreti");
     return;
   }
   const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
@@ -72,6 +74,39 @@ async function main() {
         const flags = [u.disabled && "disattivato", u.must_change && "password temporanea", u.totp_enabled && "2FA"].filter(Boolean);
         console.log(`${u.username.padEnd(24)} ${u.role.padEnd(8)} ${flags.join(", ")}`);
       }
+      return;
+    }
+    if (command === "cifra-segreti") {
+      // cifra i segreti TOTP ancora in chiaro e ricifra quelli con una chiave vecchia (rotazione)
+      if (!hasSecretKey()) fail("HW_SECRET_KEY manca o non è valida in .env: generala con  openssl rand -hex 32");
+      const { rows } = await client.query("SELECT id, username, totp_secret FROM users WHERE totp_secret IS NOT NULL ORDER BY id");
+      let changed = 0;
+      let errors = 0;
+      for (const u of rows) {
+        let secret;
+        try {
+          secret = openSecret(u.totp_secret, totpContext(u.id));
+        } catch (error) {
+          errors++;
+          console.error(`${u.username}: ${error.message}`);
+          continue;
+        }
+        if (!secret.stale) continue;
+        const res = await client.query("UPDATE users SET totp_secret = $2 WHERE id = $1 AND totp_secret = $3", [
+          u.id,
+          sealSecret(secret.value, totpContext(u.id)),
+          u.totp_secret,
+        ]);
+        changed += res.rowCount ?? 0;
+      }
+      if (changed) {
+        await client.query("INSERT INTO audit_log (username, action, target, detail) VALUES ('(console)', 'secrets.reseal', 'totp', $1)", [
+          JSON.stringify({ count: changed, cli: true }),
+        ]);
+      }
+      console.log(`Segreti TOTP: ${rows.length} in tutto, ${changed} cifrati ora con la chiave attuale, ${errors} illeggibili.`);
+      if (errors) process.exitCode = 1;
+      else if (process.env.HW_SECRET_KEY_OLD?.trim()) console.log("Ora puoi togliere HW_SECRET_KEY_OLD da .env e riavviare il sito.");
       return;
     }
     if (!username || !USERNAME.test(username)) fail("Nome utente: 2-40 caratteri tra lettere, cifre, punto, trattino e underscore.");

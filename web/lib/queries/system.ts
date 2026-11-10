@@ -1,6 +1,7 @@
 import "server-only";
 import { ch } from "../ch";
 import { db, setting } from "../db";
+import { hasSecretKey } from "../secretbox.mjs";
 
 export interface SensorRow {
   id: number;
@@ -218,4 +219,12 @@ export async function listAudit(f: { q: string; action: string; days: number }, 
     params,
   );
   return rows;
+}
+
+/** Stato della cifratura dei segreti 2FA: chiave presente e quanti segreti sono ancora in chiaro. */
+export async function secretStatus() {
+  const { rows } = await db().query<{ total: number; plain: number }>(
+    "SELECT count(*)::int AS total, count(*) FILTER (WHERE totp_secret NOT LIKE 'enc:v1:%')::int AS plain FROM users WHERE totp_secret IS NOT NULL",
+  );
+  return { key: hasSecretKey(), total: rows[0]?.total ?? 0, plain: rows[0]?.plain ?? 0 };
 }

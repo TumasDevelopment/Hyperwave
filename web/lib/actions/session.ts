@@ -16,6 +16,7 @@ import { db } from "../db";
 import { text, type FormState } from "../form";
 import { clearFailures, lockedMinutes, recordFailure } from "../login-limit";
 import { hashPassword, verifyPassword } from "../password.mjs";
+import { hasSecretKey, openSecret, sealSecret, totpContext } from "../secretbox.mjs";
 import { findRecoveryCode, verifyTotp } from "../totp.mjs";
 
 // Con un nome utente inesistente si verifica comunque una password: i tempi di risposta non rivelano chi esiste.
@@ -74,10 +75,19 @@ export async function verifyCode(_state: FormState, form: FormData): Promise<For
     return { error: "Accedi di nuovo.", next: "password" };
   }
 
+  let secret: { value: string; stale: boolean };
+  try {
+    secret = openSecret(user.totp_secret, totpContext(userId));
+  } catch (error) {
+    // chiave mancante o cambiata: l'utente non può farci nulla, l'amministratore deve sistemare .env
+    console.error("Due fattori:", error instanceof Error ? error.message : error);
+    return { error: "Verifica dei due fattori non disponibile per un problema di configurazione del server. Avvisa l'amministratore." };
+  }
+
   let ok = false;
   let recovery = false;
   if (/^\d{6}$/.test(code.replace(/\s/g, ""))) {
-    const step = verifyTotp(user.totp_secret, code, Date.now() / 1000, user.totp_last_step);
+    const step = verifyTotp(secret.value, code, Date.now() / 1000, user.totp_last_step);
     if (step !== null) {
       // l'aggiornamento condizionato impedisce di usare due volte lo stesso codice anche con due richieste insieme
       const res = await db().query(
@@ -100,6 +110,16 @@ export async function verifyCode(_state: FormState, form: FormData): Promise<For
   if (!ok) {
     await audit({ username: user.username }, "login.2fa_failed", user.username);
     return { error: "Codice non corretto.", next: "totp" };
+  }
+  // segreto in chiaro (di prima della cifratura) o cifrato con una chiave vecchia: si ricifra ora
+  if (secret.stale && hasSecretKey()) {
+    await db()
+      .query("UPDATE users SET totp_secret = $2 WHERE id = $1 AND totp_secret = $3", [
+        userId,
+        sealSecret(secret.value, totpContext(userId)),
+        user.totp_secret,
+      ])
+      .catch((error: Error) => console.error("Ricifratura del segreto TOTP non riuscita:", error.message));
   }
   await clearLoginChallenge();
   await createSession(userId);
