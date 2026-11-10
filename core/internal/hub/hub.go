@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -73,22 +74,23 @@ func ConfigFromEnv() Config {
 
 // Hub tiene le connessioni e lo stato condiviso tra ingest, inventario e motore.
 type Hub struct {
-	cfg    Config
-	log    *slog.Logger
-	pg     *pgxpool.Pool
-	ch     *chx.Client
-	nc     *nats.Conn
-	state  *State
-	enr    *Enricher
-	inv    *Inventory
-	eng    *Engine
-	live   *livePublisher
-	auth   *sensorAuth
-	supp   *suppressions
-	intel  *intel
-	marks  sync.Map // sensorID → *watermark (avanzamento del backfill)
-	start  time.Time
-	ingest ingestStats
+	cfg        Config
+	log        *slog.Logger
+	pg         *pgxpool.Pool
+	ch         *chx.Client
+	nc         *nats.Conn
+	state      *State
+	enr        *Enricher
+	inv        *Inventory
+	eng        *Engine
+	live       *livePublisher
+	auth       *sensorAuth
+	supp       *suppressions
+	intel      *intel
+	customBusy atomic.Bool // prova di una regola personalizzata in corso
+	marks      sync.Map    // sensorID → *watermark (avanzamento del backfill)
+	start      time.Time
+	ingest     ingestStats
 }
 
 // Connect apre i database, applica le migrazioni e si collega a NATS.
@@ -131,6 +133,12 @@ func Connect(ctx context.Context, cfg Config, log *slog.Logger) (*Hub, error) {
 		return nil, err
 	}
 	h.eng = newEngine(h)
+	if err := h.eng.loadCustom(ctx); err != nil {
+		return nil, fmt.Errorf("regole personalizzate: %w", err)
+	}
+	if err := h.eng.saveCustomSchema(ctx); err != nil {
+		return nil, err
+	}
 	if err := h.eng.syncCatalog(ctx); err != nil {
 		return nil, err
 	}
@@ -186,8 +194,16 @@ func (h *Hub) Run(ctx context.Context) error {
 		case "hw.control.sensors":
 			h.auth.flush()
 		case "hw.control.rules":
-			h.eng.reloadRules(rctx)
+			if err := h.eng.loadCustom(rctx); err != nil {
+				h.log.Warn("regole personalizzate", "err", err)
+			}
+			if err := h.eng.syncCatalog(rctx); err != nil {
+				h.log.Warn("catalogo delle regole", "err", err)
+			}
 			h.supp.load(rctx, h.pg)
+		case "hw.control.customtest":
+			h.customTestHandler(ctx, m)
+			return
 		case "hw.control.intel":
 			h.intel.control(rctx, m.Data)
 		default:

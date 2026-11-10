@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,8 +42,9 @@ type ruleState struct {
 // Engine esegue le regole su finestre di tempo successive.
 // Il cursore (PG settings.engine_cursor, in ms) indica fin dove i dati sono stati analizzati.
 type Engine struct {
-	h    *Hub
-	defs []*RuleDef
+	h      *Hub
+	defs   []*RuleDef
+	custom atomic.Pointer[[]*RuleDef] // regole personalizzate (custom.go)
 
 	mu     sync.RWMutex
 	rules  map[string]ruleState
@@ -80,6 +82,15 @@ func newEngine(h *Hub) *Engine {
 	return e
 }
 
+// allDefs restituisce il catalogo con le regole personalizzate in fondo.
+func (e *Engine) allDefs() []*RuleDef {
+	c := e.custom.Load()
+	if c == nil || len(*c) == 0 {
+		return e.defs
+	}
+	return append(slices.Clip(e.defs), *c...)
+}
+
 func (e *Engine) rule(id string) (ruleState, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -89,8 +100,9 @@ func (e *Engine) rule(id string) (ruleState, bool) {
 
 // syncCatalog scrive il catalogo in PostgreSQL: l'interfaccia lo legge da lì.
 func (e *Engine) syncCatalog(ctx context.Context) error {
-	ids := make([]string, 0, len(e.defs))
-	for _, d := range e.defs {
+	defs := e.allDefs()
+	ids := make([]string, 0, len(defs))
+	for _, d := range defs {
 		p, _ := json.Marshal(d.Params)
 		help, _ := json.Marshal(d.Help)
 		if d.Params == nil {
@@ -139,7 +151,7 @@ func (e *Engine) reloadRules(ctx context.Context) {
 		custom[id] = ruleState{Enabled: enabled, SeverityOverride: sev, Params: p}
 	}
 	next := map[string]ruleState{}
-	for _, d := range e.defs {
+	for _, d := range e.allDefs() {
 		st := ruleState{Enabled: true, Severity: d.Severity, Mitre: d.Mitre, Params: params{}}
 		for k, v := range d.Params {
 			st.Params[k] = v
@@ -268,7 +280,7 @@ func (e *Engine) tick(ctx context.Context) error {
 }
 
 func (e *Engine) runStep(ctx context.Context, from, to int64) {
-	for _, d := range e.defs {
+	for _, d := range e.allDefs() {
 		if d.Run == nil {
 			continue
 		}
@@ -285,6 +297,7 @@ func (e *Engine) runStep(ctx context.Context, from, to int64) {
 		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		alerts, err := d.Run(rctx, e, w, st.Params)
 		cancel()
+		e.noteCustom(ctx, d.ID, len(alerts), err)
 		if err != nil {
 			e.h.log.Warn("regola", "rule", d.ID, "err", err)
 			continue

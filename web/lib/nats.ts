@@ -37,3 +37,18 @@ export async function notifyHub(what: "settings" | "rules" | "sensors" | "intel"
     console.error("Avviso all'hub non inviato:", (error as Error).message);
   }
 }
+
+/**
+ * Domanda all'hub con risposta (NATS request-reply), per esempio la prova di una regola
+ * personalizzata. Restituisce null se l'hub non risponde in tempo.
+ */
+export async function askHub<T>(subject: "customtest", payload: unknown, timeoutMs = 35_000): Promise<T | null> {
+  try {
+    const nc = await nats();
+    const reply = await nc.request(`hw.control.${subject}`, new TextEncoder().encode(JSON.stringify(payload)), { timeout: timeoutMs });
+    return JSON.parse(new TextDecoder().decode(reply.data)) as T;
+  } catch (error) {
+    console.error("Richiesta all'hub senza risposta:", (error as Error).message);
+    return null;
+  }
+}

@@ -108,6 +108,7 @@ export interface RuleRow {
   updated_by: string;
   alerts_30d: number;
   open: number;
+  last_error: string;
 }
 
 export async function listRules(): Promise<RuleRow[]> {
@@ -116,9 +117,11 @@ export async function listRules(): Promise<RuleRow[]> {
             coalesce(r.enabled, true) AS enabled, r.severity, coalesce(r.params, '{}') AS custom, r.updated_at,
             coalesce(r.updated_by, '') AS updated_by,
             (SELECT count(*)::int FROM alerts a WHERE a.rule = c.id AND a.first_seen > now() - interval '30 days') AS alerts_30d,
-            (SELECT count(*)::int FROM alerts a WHERE a.rule = c.id AND a.status <> 'resolved') AS open
+            (SELECT count(*)::int FROM alerts a WHERE a.rule = c.id AND a.status <> 'resolved') AS open,
+            coalesce(cr.last_error, '') AS last_error
      FROM rule_catalog c LEFT JOIN rules r ON r.id = c.id
-     ORDER BY c.category, c.name`,
+     LEFT JOIN custom_rules cr ON c.id = 'custom:' || cr.id
+     ORDER BY c.id LIKE 'custom:%', c.category, c.name`,
   );
   return rows;
 }

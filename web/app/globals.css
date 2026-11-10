@@ -1554,3 +1554,25 @@ pre {
     width: 100%;
   }
 }
+
+/* Regole personalizzate */
+.mb {
+  margin-bottom: 16px;
+}
+.rule-cond {
+  align-items: flex-start;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--bg-2);
+}
+.rule-cond select {
+  max-width: 100%;
+}
+.rule-sentence {
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-bg);
+  border-radius: var(--radius-s);
+  color: var(--text);
+}

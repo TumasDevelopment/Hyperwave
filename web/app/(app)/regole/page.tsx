@@ -36,7 +36,13 @@ export default async function RulesPage() {
       <PageHead
         title="Regole di rilevamento"
         sub="Il motore dell'hub analizza i flussi ogni minuto. Qui scegli quali regole usare, con quale gravità e con quali soglie."
-      />
+      >
+        {admin && (
+          <Link href="/regole/personalizzate/nuova" className="btn btn--primary">
+            Nuova regola personalizzata
+          </Link>
+        )}
+      </PageHead>
       {rules.length === 0 && <Empty>Il catalogo delle regole compare dopo il primo avvio dell&apos;hub.</Empty>}
       {categories.map((cat) => (
         <Card key={cat} title={CATEGORY_LABELS[cat] ?? cat}>
@@ -63,6 +69,12 @@ export default async function RulesPage() {
                     </summary>
                     <div className="rule__body">
                       <p>{r.description}</p>
+                      {r.id.startsWith("custom:") && (
+                        <p>
+                          {r.last_error && <span className="text-warn">Errore all'ultimo giro: {r.last_error}. </span>}
+                          <Link href={`/regole/personalizzate/${r.id.slice(7)}`}>{admin ? "Modifica la definizione e provala sullo storico" : "Vedi la definizione"}</Link>
+                        </p>
+                      )}
                       <p className="muted small">
                         Codice <span className="mono">{r.id}</span>
                         {r.mitre && (
