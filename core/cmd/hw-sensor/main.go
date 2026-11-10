@@ -2,6 +2,9 @@
 //
 //	hw-sensor -mode capture -iface eth1        cattura da un'interfaccia (porta SPAN o TAP)
 //	hw-sensor -mode pcap -file traccia.pcapng   analizza uno o più file (separati da virgole)
+//	hw-sensor -mode flow                       riceve NetFlow v5/v9, IPFIX e sFlow da router e switch
+//	hw-sensor -mode zeek                       segue i log di Zeek (HW_ZEEK_DIR); con -file li importa
+//	hw-sensor -mode vpcflow -file log.gz       importa i VPC Flow Logs di AWS
 //	hw-sensor -mode demo                       genera il traffico dimostrativo di "Azienda Demo"
 //
 // Il token si legge solo da HW_SENSOR_TOKEN (variabile o file .env), mai dalla riga di comando,
@@ -30,9 +33,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "lettura .env:", err)
 		os.Exit(1)
 	}
-	mode := flag.String("mode", env.Str("HW_SENSOR_MODE", "capture"), "demo | capture | pcap")
+	mode := flag.String("mode", env.Str("HW_SENSOR_MODE", "capture"), "demo | capture | pcap | flow | zeek | vpcflow")
 	iface := flag.String("iface", env.Str("HW_IFACE", ""), "interfacce da osservare, separate da virgole")
-	file := flag.String("file", "", "file pcap o pcapng da analizzare, separati da virgole")
+	file := flag.String("file", "", "file da analizzare o importare (pcap, log di Zeek, VPC Flow Logs), separati da virgole")
 	hubURL := flag.String("hub", env.Str("HW_HUB_URL", "http://127.0.0.1:3121"), "indirizzo dell'hub")
 	showVersion := flag.Bool("version", false, "mostra la versione")
 	flag.Parse()
@@ -48,20 +51,24 @@ func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
 	cfg := sensor.Config{
-		HubURL:      *hubURL,
-		Token:       env.Str("HW_SENSOR_TOKEN", ""),
-		CAFile:      env.Str("HW_HUB_CA", ""),
-		Mode:        *mode,
-		Ifaces:      list(*iface),
-		Files:       list(*file),
-		Timezone:    env.Str("HW_TZ", "Europe/Rome"),
-		Snaplen:     env.Int("HW_SNAPLEN", 65536),
-		Promisc:     env.Bool("HW_PROMISC", true),
-		IgnoreNets:  env.Str("HW_CAPTURE_IGNORE", ""),
-		SuricataEve: env.Str("HW_SURICATA_EVE", ""),
-		MaxPending:  env.Int("HW_MAX_PENDING", 500_000),
-		SpoolDir:    spoolDir(),
-		SpoolMaxMB:  env.Int("HW_SPOOL_MAX_MB", 2048),
+		HubURL:       *hubURL,
+		Token:        env.Str("HW_SENSOR_TOKEN", ""),
+		CAFile:       env.Str("HW_HUB_CA", ""),
+		Mode:         *mode,
+		Ifaces:       list(*iface),
+		Files:        list(*file),
+		Timezone:     env.Str("HW_TZ", "Europe/Rome"),
+		Snaplen:      env.Int("HW_SNAPLEN", 65536),
+		Promisc:      env.Bool("HW_PROMISC", true),
+		IgnoreNets:   env.Str("HW_CAPTURE_IGNORE", ""),
+		SuricataEve:  env.Str("HW_SURICATA_EVE", ""),
+		MaxPending:   env.Int("HW_MAX_PENDING", 500_000),
+		SpoolDir:     spoolDir(),
+		SpoolMaxMB:   env.Int("HW_SPOOL_MAX_MB", 2048),
+		FlowListen:   list(env.Str("HW_FLOW_LISTEN", "0.0.0.0:2055,0.0.0.0:6343")),
+		FlowAllow:    env.Str("HW_FLOW_ALLOW", ""),
+		FlowSampling: env.Int("HW_FLOW_SAMPLING", 0),
+		ZeekDir:      env.Str("HW_ZEEK_DIR", "/opt/zeek/logs/current"),
 	}
 	r, err := sensor.New(cfg, log)
 	if err != nil {

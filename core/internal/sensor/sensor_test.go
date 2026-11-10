@@ -323,7 +323,8 @@ func TestSplit(t *testing.T) {
 	for range 25 {
 		b.Flows = append(b.Flows, model.Flow{})
 	}
-	b.DNS = make([]model.DNS, 7)
+	b.DNS = make([]model.DNS, 4)
+	b.Sessions = make([]model.Session, 3)
 	parts := split(b, 10)
 	total := 0
 	for _, p := range parts {

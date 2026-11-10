@@ -23,9 +23,9 @@ type Config struct {
 	HubURL   string
 	Token    string
 	CAFile   string
-	Mode     string   // demo | capture | pcap
+	Mode     string   // demo | capture | pcap | flow | zeek | vpcflow
 	Ifaces   []string // capture
-	Files    []string // pcap
+	Files    []string // pcap, vpcflow e importazione dei log di Zeek
 	Timezone string   // demo: andamento giornaliero
 
 	Snaplen     int
@@ -33,8 +33,13 @@ type Config struct {
 	IgnoreNets  string // traffico da non registrare (per esempio quello del sensore verso l'hub)
 	SuricataEve string // eve.json di Suricata da cui leggere gli allarmi IDS
 	MaxPending  int    // record in attesa oltre i quali si scarta (hub non raggiungibile)
-	SpoolDir    string // coda su disco per i lotti non consegnati (solo capture); vuoto = disattivata
+	SpoolDir    string // coda su disco per i lotti non consegnati (modalità dal vivo); vuoto = disattivata
 	SpoolMaxMB  int    // spazio massimo della coda; oltre si scartano i lotti più vecchi
+
+	FlowListen   []string // flow: indirizzi UDP su cui ricevere NetFlow, IPFIX e sFlow
+	FlowAllow    string   // flow: reti degli esportatori ammessi; vuoto = tutti
+	FlowSampling int      // flow: moltiplicatore imposto; 0 = quello dichiarato dagli esportatori
+	ZeekDir      string   // zeek: cartella dei log correnti
 }
 
 // Runner tiene lo stato condiviso tra raccolta, invio e heartbeat.
@@ -65,15 +70,24 @@ func New(cfg Config, log *slog.Logger) (*Runner, error) {
 		return nil, errors.New("manca HW_SENSOR_TOKEN: registrare il sensore sull'hub (hw-hub sensor-add) e copiarne il token")
 	}
 	switch cfg.Mode {
-	case "demo", "capture", "pcap":
+	case "demo", "capture", "pcap", "flow", "zeek", "vpcflow":
 	default:
-		return nil, fmt.Errorf("modalità %q sconosciuta: demo, capture o pcap", cfg.Mode)
+		return nil, fmt.Errorf("modalità %q sconosciuta: demo, capture, pcap, flow, zeek o vpcflow", cfg.Mode)
 	}
 	if cfg.Mode == "capture" && len(cfg.Ifaces) == 0 {
 		return nil, errors.New("indicare l'interfaccia da osservare (-iface o HW_IFACE)")
 	}
 	if cfg.Mode == "pcap" && len(cfg.Files) == 0 {
 		return nil, errors.New("indicare almeno un file pcap (-file)")
+	}
+	if cfg.Mode == "vpcflow" && len(cfg.Files) == 0 {
+		return nil, errors.New("indicare almeno un file di VPC Flow Logs (-file)")
+	}
+	if cfg.Mode == "flow" && len(cfg.FlowListen) == 0 {
+		cfg.FlowListen = []string{"0.0.0.0:2055", "0.0.0.0:6343"}
+	}
+	if cfg.ZeekDir == "" {
+		cfg.ZeekDir = "/opt/zeek/logs/current"
 	}
 	if cfg.Snaplen <= 0 {
 		cfg.Snaplen = 65536
@@ -92,7 +106,7 @@ func New(cfg Config, log *slog.Logger) (*Runner, error) {
 	r := &Runner{cfg: cfg, log: log, cl: cl, hostname: host, started: time.Now(), stats: map[string]func() any{}}
 	def := netx.ParseNets(netx.DefaultInternal)
 	r.nets.Store(&def)
-	if cfg.Mode == "capture" && cfg.SpoolDir != "" {
+	if cfg.liveMode() && cfg.SpoolDir != "" {
 		if cfg.SpoolMaxMB <= 0 {
 			cfg.SpoolMaxMB = 2048
 		}
@@ -253,9 +267,20 @@ func (r *Runner) Run(ctx context.Context) error {
 		return r.runDemo(ctx)
 	case "capture":
 		return r.runCapture(ctx)
+	case "flow":
+		return r.runFlow(ctx)
+	case "zeek":
+		return r.runZeek(ctx)
+	case "vpcflow":
+		return r.runVPCFlow(ctx)
 	default:
 		return r.runPcap(ctx)
 	}
+}
+
+// liveMode: le modalità che raccolgono dati dal vivo, per cui ha senso la coda su disco.
+func (c Config) liveMode() bool {
+	return c.Mode == "capture" || c.Mode == "flow" || c.Mode == "zeek" && len(c.Files) == 0
 }
 
 // ---------------------------------------------------------------- sink
@@ -358,6 +383,12 @@ func split(b *model.Batch, size int) []*model.Batch {
 	}
 	for _, x := range b.HTTP {
 		cur.HTTP = append(cur.HTTP, x)
+		if !room() {
+			flush()
+		}
+	}
+	for _, x := range b.Sessions {
+		cur.Sessions = append(cur.Sessions, x)
 		if !room() {
 			flush()
 		}

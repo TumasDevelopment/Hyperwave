@@ -8,7 +8,14 @@ import { listSensors, SENSOR_STATE_LABELS, sensorState } from "@/lib/queries/sys
 
 export const metadata = { title: "Sensori" };
 
-const MODE_LABELS: Record<string, string> = { capture: "Cattura", pcap: "File pcap", demo: "Dati di esempio" };
+const MODE_LABELS: Record<string, string> = {
+  capture: "Cattura",
+  pcap: "File pcap",
+  flow: "NetFlow · IPFIX · sFlow",
+  zeek: "Log di Zeek",
+  vpcflow: "VPC Flow Logs",
+  demo: "Dati di esempio",
+};
 const TONES = { online: "ok", late: "warn", offline: "bad", never: "off", disabled: "off" } as const;
 
 const STAT_LABELS: Record<string, string> = {

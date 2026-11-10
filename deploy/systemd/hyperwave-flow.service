@@ -1,0 +1,36 @@
+# Collettore di flussi: riceve NetFlow v5/v9, IPFIX e sFlow v5 da router, switch e firewall.
+# Copiare core/bin/hw-sensor in /usr/local/bin e creare /etc/hyperwave/flow.env con:
+#   HW_HUB_URL=https://hub.esempio.lan:3121
+#   HW_SENSOR_TOKEN=<token di un sensore dedicato, creato con hw-hub sensor-add>
+#   HW_FLOW_ALLOW=<reti degli esportatori, per esempio 192.0.2.0/28>
+# Sugli apparati configurare l'esportazione verso questa macchina: porta UDP 2055 per NetFlow e
+# IPFIX, 6343 per sFlow (HW_FLOW_LISTEN per cambiarle). Le porte sopra 1024 non richiedono privilegi.
+# poi: systemctl enable --now hyperwave-flow
+[Unit]
+Description=Hyperwave collettore NetFlow, IPFIX e sFlow
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+DynamicUser=yes
+EnvironmentFile=/etc/hyperwave/flow.env
+StateDirectory=hyperwave-flow
+StateDirectoryMode=0700
+ExecStart=/usr/local/bin/hw-sensor -mode flow
+CapabilityBoundingSet=
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

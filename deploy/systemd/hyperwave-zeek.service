@@ -1,0 +1,38 @@
+# Lettore dei log di Zeek: segue i file della cartella current (TSV o JSON) e li invia all'hub.
+# Copiare core/bin/hw-sensor in /usr/local/bin e creare /etc/hyperwave/zeek.env con:
+#   HW_HUB_URL=https://hub.esempio.lan:3121
+#   HW_SENSOR_TOKEN=<token di un sensore dedicato, creato con hw-hub sensor-add>
+#   HW_ZEEK_DIR=/opt/zeek/logs/current
+# Il servizio deve poter leggere i log: impostare in SupplementaryGroups il gruppo proprietario
+# della cartella di Zeek (qui "zeek"). Per importare log vecchi come storico, a mano:
+#   hw-sensor -mode zeek -file /opt/zeek/logs/2026-11-09
+# poi: systemctl enable --now hyperwave-zeek
+[Unit]
+Description=Hyperwave lettore dei log di Zeek
+After=network-online.target zeek.service
+Wants=network-online.target
+
+[Service]
+DynamicUser=yes
+SupplementaryGroups=zeek
+EnvironmentFile=/etc/hyperwave/zeek.env
+StateDirectory=hyperwave-zeek
+StateDirectoryMode=0700
+ExecStart=/usr/local/bin/hw-sensor -mode zeek
+CapabilityBoundingSet=
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

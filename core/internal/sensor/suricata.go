@@ -1,11 +1,8 @@
 package sensor
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
-	"io"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -16,76 +13,15 @@ import (
 // tailSuricata segue il file eve.json di Suricata e inoltra gli allarmi all'hub come eventi IDS.
 // Parte dalla fine del file (niente allarmi vecchi) e segue la rotazione dei log.
 func (r *Runner) tailSuricata(ctx context.Context, out *sink) {
-	path := r.cfg.SuricataEve
-	var (
-		f   *os.File
-		rd  *bufio.Reader
-		pos int64
-	)
-	open := func(fromEnd bool) bool {
-		nf, err := os.Open(path)
-		if err != nil {
-			return false
-		}
-		if f != nil {
-			f.Close()
-		}
-		f, pos = nf, 0
-		if fromEnd {
-			pos, _ = f.Seek(0, io.SeekEnd)
-		}
-		rd = bufio.NewReaderSize(f, 256<<10)
-		return true
-	}
-	if open(true) {
-		r.log.Info("lettura degli allarmi di Suricata", "file", path)
-	} else {
-		r.log.Warn("eve.json di Suricata non ancora presente, lo attendo", "file", path)
-	}
 	var forwarded atomic.Int64
 	r.addStat("ids_events", func() any { return forwarded.Load() })
-	var partial strings.Builder
-	t := time.NewTicker(time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			if f != nil {
-				f.Close()
-			}
-			return
-		case <-t.C:
+	r.log.Info("lettura degli allarmi di Suricata", "file", r.cfg.SuricataEve)
+	r.tailFile(ctx, r.cfg.SuricataEve, tailOpts{}, func(line string) {
+		if ev, ok := parseEve(line); ok {
+			forwarded.Add(1)
+			out.put(func(b *model.Batch) { b.Events = append(b.Events, ev) })
 		}
-		if f == nil {
-			if open(false) {
-				r.log.Info("eve.json di Suricata trovato", "file", path)
-			}
-			continue
-		}
-		for {
-			line, err := rd.ReadString('\n')
-			pos += int64(len(line))
-			if err != nil {
-				partial.WriteString(line) // riga non ancora completa
-				break
-			}
-			if partial.Len() > 0 {
-				line = partial.String() + line
-				partial.Reset()
-			}
-			if ev, ok := parseEve(line); ok {
-				forwarded.Add(1)
-				out.put(func(b *model.Batch) { b.Events = append(b.Events, ev) })
-			}
-		}
-		// rotazione: il percorso punta a un altro file, oppure il file è stato troncato
-		st, err1 := os.Stat(path)
-		cur, err2 := f.Stat()
-		if err1 == nil && err2 == nil && (!os.SameFile(st, cur) || st.Size() < pos) {
-			partial.Reset()
-			open(false)
-		}
-	}
+	})
 }
 
 type eveRecord struct {
