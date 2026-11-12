@@ -15,12 +15,12 @@
   "dependencies": {
     "geist": "1.9.2",
     "nats": "2.29.3",
-    "next": "16.4.2",
+    "next": "16.4.5",
     "pdfkit": "^0.20.2",
     "pg": "^8.23.1",
     "qrcode-generator": "^1.4.4",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "server-only": "^0.0.1",
     "uplot": "^1.6.32"
   },
