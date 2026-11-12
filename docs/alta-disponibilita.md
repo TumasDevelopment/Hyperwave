@@ -165,4 +165,4 @@ journalctl -u hyperwave-backup                 # esito delle ultime
 
 **Con più server.** Lo script lavora sulla macchina dove gira ClickHouse, perché ClickHouse scrive l'archivio sul proprio disco. Se ClickHouse sta su un'altra macchina, lanciate lo script lì, oppure usate `HW_BACKUP_CLICKHOUSE=0` e un backup di ClickHouse verso S3 (`BACKUP DATABASE hyperwave TO S3(...)`). Con le repliche basta il backup di un nodo.
 
-ClickHouse deve avere il disco `backups` (in `deploy/clickhouse/hyperwave-config.xml`) e l'utente `hyperwave` il permesso di scriverci (`GRANT READ, WRITE ON DISK('backups')` in `hyperwave-users.xml.tmpl`). `setup.sh` li installa entrambi.
+ClickHouse deve avere il disco `backups` (in `deploy/clickhouse/hyperwave-config.xml`) e l'utente `hyperwave` il permesso di scriverci (`GRANT READ, WRITE ON DISK` in `hyperwave-users.xml.tmpl`; i backup possono andare solo sui dischi elencati in `<backups><allowed_disk>`). `setup.sh` li installa entrambi.

@@ -28,7 +28,7 @@ envget() { grep -E "^$1=" "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true; }
 
 [[ $EUID -eq 0 ]] || die "va eseguito con sudo"
 [[ -r "$ENV_FILE" ]] || die "manca $ENV_FILE"
-for bin in pg_dump pg_restore psql curl sha256sum flock; do
+for bin in pg_dump pg_restore psql curl sha256sum flock runuser; do
   command -v "$bin" >/dev/null || die "manca il comando $bin"
 done
 
@@ -203,12 +203,12 @@ cmd_verifica() {
   quick_check "$src"
 
   cleanup_check() {
-    sudo -u postgres dropdb --if-exists "$CHECK_DB" >/dev/null 2>&1 || true
+    runuser -u postgres -- dropdb --if-exists "$CHECK_DB" >/dev/null 2>&1 || true
     echo "DROP DATABASE IF EXISTS \`$CHECK_DB\` SYNC" | ch >/dev/null 2>&1 || true
   }
   cleanup_check
   trap 'cleanup_check; rm -rf "$TMP"' EXIT
-  sudo -u postgres createdb --owner="$PG_USER" "$CHECK_DB"
+  runuser -u postgres -- createdb --owner="$PG_USER" "$CHECK_DB"
   pg_restore_into "$src" "$CHECK_DB"
 
   local want got
