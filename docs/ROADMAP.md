@@ -20,7 +20,6 @@ Legenda:
 
 | Limite | Effetto | Soluzione prevista |
 |---|---|---|
-| Il blocco dei tentativi di accesso è in memoria | si azzera al riavvio; non funziona con più istanze dell'interfaccia | spostarlo in PostgreSQL insieme all'HA (P1) |
 | Nessuna notifica verso l'esterno | gli allarmi si vedono solo nell'interfaccia e via API | canali da scegliere (P1, vedi sotto) |
 | I test coprono funzioni e moduli, non i percorsi completi | un errore nell'integrazione tra pagine, hub e basi di dati si scopre a mano | Playwright e test di integrazione in container (P1) |
 | La pagina Flussi carica fino a 500 righe in una volta | pagine pesanti su connessioni lente | paginazione a cursore (P2) |
@@ -74,10 +73,10 @@ Sforzo M.
 Sforzo M.
 
 ### Alta disponibilità e scalabilità
-- **Hub.** Più istanze dietro un bilanciatore. La ricezione non ha stato; il motore gira su una sola istanza alla volta, eletta con un lock consultivo di PostgreSQL.
-- **ClickHouse.** Replicato (ReplicatedMergeTree + Keeper) e con shard per oltre 10 Gbit/s.
-- **PostgreSQL.** Replica in streaming e failover gestito da Patroni.
-- **Backup.** Automatici, verificati, con conservazione configurabile.
+- ~~**Hub.** Più istanze dietro un bilanciatore. La ricezione non ha stato; il motore gira su una sola istanza alla volta, eletta con un lock consultivo di PostgreSQL.~~ Fatto (novembre 2026), insieme a più istanze dell'interfaccia e al blocco degli accessi in PostgreSQL.
+- ~~**ClickHouse replicato.** ReplicatedMergeTree + Keeper.~~ Fatto (novembre 2026): l'hub riconosce un database `Replicated`. Resta: shard (tabelle `Distributed`) per oltre 10 Gbit/s.
+- ~~**PostgreSQL.** Replica in streaming e failover gestito da Patroni.~~ Documentato (novembre 2026) in [alta-disponibilita.md](alta-disponibilita.md).
+- ~~**Backup.** Automatici, verificati, con conservazione configurabile.~~ Fatto (novembre 2026): `deploy/backup.sh` con timer notturno e ripristino di prova settimanale. Resta: copia fuori sede integrata (S3, restic).
 
 Sforzo L.
 
@@ -111,9 +110,11 @@ Sforzo M.
 - **Reputazione** di domini e IP, con dominio giovane e categoria.
 
 ### PCAP su richiesta
-- Buffer circolare sul sensore, per esempio le ultime 2 ore su disco.
-- Estrazione dei pacchetti di un flusso o di un allarme con un clic, da aprire in Wireshark.
-- Accesso consentito solo ad alcuni ruoli e registrato: i pacchetti contengono dati personali.
+- ~~Buffer circolare sul sensore, per esempio le ultime 2 ore su disco.~~
+- ~~Estrazione dei pacchetti di un flusso o di un allarme con un clic, da aprire in Wireshark.~~
+- ~~Accesso consentito solo ad alcuni ruoli e registrato: i pacchetti contengono dati personali.~~
+
+Fatto (novembre 2026). Resta: buffer anche per le modalità flow e zeek (oggi solo capture), cifratura del buffer su disco.
 
 ### Rilevamento
 - **Regole personalizzate** scritte dagli amministratori, in un linguaggio tipo Sigma o come query ClickHouse con soglie, provabili sullo storico prima di attivarle.
@@ -125,7 +126,7 @@ Sforzo M.
 - **Mappa delle comunicazioni.** Grafo di chi parla con chi, filtrabile per VLAN, sede, applicazione.
 - **Topologia** da LLDP/CDP e dalle tabelle ARP degli switch via SNMP.
 - **Dashboard personalizzabili** e ricerche salvate.
-- **Rapporti PDF periodici.** Settimanale per la direzione; tecnico; per la conformità NIS2 e ISO 27001 (inventario, eventi, tempi di risposta).
+- ~~**Rapporti PDF periodici.** Settimanale per la direzione; tecnico; per la conformità NIS2 e ISO 27001 (inventario, eventi, tempi di risposta).~~ Fatto (novembre 2026), solo archivio nell'interfaccia. Resta: invio, quando ci saranno le notifiche.
 
 ### Inventario
 - **Fonti esterne.** Active Directory, server DHCP, MDM, CMDB (GLPI, ServiceNow).
@@ -147,7 +148,7 @@ Sforzo M.
 
 ## Ordine consigliato
 
-Fatti a novembre 2026: cifratura dei segreti TOTP, coda su disco del sensore, test, CI e rilasci firmati.
+Fatti a novembre 2026: cifratura dei segreti TOTP, coda su disco del sensore, test, CI e rilasci firmati, blocco degli accessi in PostgreSQL, PCAP su richiesta, rapporti PDF, alta disponibilità e backup.
 
 1. Notifiche, dopo la scelta dei canali.
 2. SSO.
@@ -155,5 +156,4 @@ Fatti a novembre 2026: cifratura dei segreti TOTP, coda su disco del sensore, te
 4. Limiti di frequenza dell'API e specifica OpenAPI.
 5. Test end-to-end e di integrazione.
 6. QUIC e threat intelligence: i due miglioramenti di rilevamento con il miglior rapporto tra valore e sforzo.
-7. PCAP su richiesta e rapporti PDF.
-8. Alta disponibilità, quando un cliente supera una sede o 1 Gbit/s.
+7. Shard di ClickHouse, quando un cliente supera i 10 Gbit/s.

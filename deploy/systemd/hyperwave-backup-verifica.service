@@ -1,0 +1,11 @@
+[Unit]
+Description=Hyperwave: verifica completa dell'ultimo backup (ripristino di prova)
+After=postgresql.service clickhouse-server.service
+
+[Service]
+Type=oneshot
+ExecStart=@ROOT@/deploy/backup.sh verifica
+Nice=15
+IOSchedulingClass=idle
+ProtectHome=read-only
+PrivateTmp=yes

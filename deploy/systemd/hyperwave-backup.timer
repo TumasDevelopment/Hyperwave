@@ -1,0 +1,11 @@
+[Unit]
+Description=Hyperwave: backup notturno
+
+[Timer]
+OnCalendar=*-*-* 02:30
+RandomizedDelaySec=20m
+# se la macchina era spenta all'ora prevista, il backup parte all'avvio
+Persistent=true
+
+[Install]
+WantedBy=timers.target

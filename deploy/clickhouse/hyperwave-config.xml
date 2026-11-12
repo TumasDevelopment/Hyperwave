@@ -16,6 +16,20 @@
     <index_mark_cache_size>67108864</index_mark_cache_size>
     <query_condition_cache_size>33554432</query_condition_cache_size>
 
+    <!-- backup: deploy/backup.sh scrive qui con BACKUP ... TO Disk('backups', ...) e poi sposta l'archivio -->
+    <storage_configuration>
+        <disks>
+            <backups>
+                <type>local</type>
+                <path>/var/lib/clickhouse/backups/</path>
+            </backups>
+        </disks>
+    </storage_configuration>
+    <backups>
+        <allowed_disk>backups</allowed_disk>
+        <allowed_path>/var/lib/clickhouse/backups/</allowed_path>
+    </backups>
+
     <logger>
         <level>warning</level>
         <size>50M</size>

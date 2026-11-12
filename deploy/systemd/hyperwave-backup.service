@@ -1,0 +1,13 @@
+[Unit]
+Description=Hyperwave: backup di PostgreSQL e ClickHouse
+After=postgresql.service clickhouse-server.service
+Wants=postgresql.service clickhouse-server.service
+
+[Service]
+Type=oneshot
+# root: deve spostare gli archivi scritti da ClickHouse e lanciare la verifica come postgres.
+ExecStart=@ROOT@/deploy/backup.sh
+Nice=10
+IOSchedulingClass=idle
+ProtectHome=read-only
+PrivateTmp=yes

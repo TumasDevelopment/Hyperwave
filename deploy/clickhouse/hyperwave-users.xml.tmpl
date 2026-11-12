@@ -44,6 +44,9 @@
                 <query>GRANT ALL ON hyperwave.*</query>
                 <!-- Per la pagina Impostazioni: spazio occupato dalle tabelle. -->
                 <query>GRANT SELECT ON system.parts</query>
+                <!-- Per deploy/backup.sh: verifica e ripristino passano da un database di prova. -->
+                <query>GRANT ALL ON hw_backup_check.*</query>
+                <query>GRANT READ, WRITE ON DISK('backups')</query>
             </grants>
         </hyperwave>
     </users>

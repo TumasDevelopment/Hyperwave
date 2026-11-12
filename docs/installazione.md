@@ -160,6 +160,13 @@ server {
     deny all;
     client_max_body_size 64m;
     location /v1/ { proxy_pass http://127.0.0.1:3121; }
+    # file dei pacchetti estratti dai sensori: fino a HW_PCAP_MAX_MB, su linee lente anche minuti
+    location /v1/pcap/ {
+        proxy_pass http://127.0.0.1:3121;
+        client_max_body_size 200m;
+        proxy_request_buffering off;
+        proxy_read_timeout 15m;
+    }
 }
 ```
 
@@ -191,6 +198,23 @@ In alternativa, a mano:
 L'unità gira senza privilegi di root: ha solo `CAP_NET_RAW` e `CAP_NET_ADMIN`.
 
 Se l'hub non risponde, il sensore salva i lotti in una coda cifrata su disco (`/var/lib/hyperwave-sensor/coda`, al massimo `HW_SPOOL_MAX_MB` MB, predefinito 2048) e li invia quando la connessione torna, anche dopo un riavvio. La pagina **Sensori** mostra i record e i byte in coda e quelli scartati per mancanza di spazio: dopo una prima interruzione si vede quanto spazio serve al vostro traffico.
+
+### Pacchetti su richiesta (facoltativo)
+
+Il sensore può tenere un buffer circolare con il traffico completo delle ultime ore. Dalla pagina **Pacchetti** (o dal pulsante «Pacchetti» di un allarme, di un dispositivo o della ricerca dei flussi) si chiede un estratto: il sensore cerca i pacchetti, li invia all'hub e il file `.pcap` si scarica dall'interfaccia per aprirlo con Wireshark.
+
+Il buffer è **spento** di default: contiene il contenuto delle comunicazioni, dati personali compresi. Prima di accenderlo valutate base giuridica e informativa (GDPR, accordi sindacali sul controllo a distanza). Per accenderlo, in `/etc/hyperwave/sensor.env`:
+
+```
+HW_PCAP_DIR=on               # $STATE_DIRECTORY/pacchetti, cioè /var/lib/hyperwave-sensor/pacchetti
+HW_PCAP_RING_MB=4096         # spazio massimo
+HW_PCAP_RING_MINUTES=120     # minuti conservati (vale il limite raggiunto per primo)
+```
+
+- **Chi può chiedere un estratto.** Di default solo gli amministratori; in **Impostazioni → Generale** si può estendere agli analisti.
+- **Registro.** Ogni richiesta, con il motivo obbligatorio, e ogni download finiscono nel registro delle attività.
+- **Limiti.** Un estratto copre al massimo 6 ore. Il file resta sull'hub `HW_PCAP_KEEP_DAYS` giorni (7). La dimensione massima è il minore tra `HW_PCAP_EXPORT_MB` del sensore e `HW_PCAP_MAX_MB` dell'hub (200).
+- **Stato.** La pagina **Sensori** mostra lo stato del buffer e quanto tempo copre davvero.
 
 ### Suricata (facoltativo)
 
@@ -249,11 +273,20 @@ L'archivio `hyperwave-<versione>-linux-<arch>-completo.tar.gz` contiene i sorgen
 
 ## 8. Backup
 
-| Cosa | Come | Note |
-|---|---|---|
-| `.env` | copia del file | contiene i segreti, compresa `HW_SECRET_KEY`: senza, il backup di PostgreSQL non basta per i due fattori. Conservatelo cifrato e separato dal dump |
-| PostgreSQL | `pg_dump -Fc hyperwave > hyperwave.dump` | inventario, allarmi, regole, utenti: è la parte preziosa |
-| ClickHouse | `BACKUP DATABASE hyperwave TO Disk('backups', 'hw.zip')` | flussi: grandi, spesso basta conservarne gli ultimi giorni |
+`setup.sh` attiva un backup notturno di PostgreSQL e ClickHouse in `/var/backups/hyperwave`, con verifica dopo ogni backup, ripristino di prova la domenica e conservazione di 14 giorni:
+
+```bash
+sudo deploy/backup.sh                 # backup immediato
+sudo deploy/backup.sh verifica        # ripristino di prova dell'ultimo backup
+systemctl list-timers 'hyperwave-backup*'
+```
+
+Restano a voi due cose:
+
+- **Una copia fuori dal server**, per esempio con `restic` o `rsync` verso un'altra macchina.
+- **Una copia cifrata di `.env`**, conservata separatamente. Il backup non lo include perché contiene `HW_SECRET_KEY`: senza, dopo un ripristino i due fattori vanno riattivati.
+
+Contenuto, impostazioni, ripristino e configurazioni con più server sono in [alta-disponibilita.md](alta-disponibilita.md#backup).
 
 ## 9. Risoluzione dei problemi
 
@@ -264,4 +297,5 @@ L'archivio `hyperwave-<versione>-linux-<arch>-completo.tar.gz` contiene i sorgen
 | Nessun traffico ma sensore in linea | la porta SPAN copia davvero il traffico? `tcpdump -ni eth1 -c 20` sulla macchina del sensore |
 | Direzioni sbagliate (tutto «Esterno») | reti interne in **Impostazioni → Rete** |
 | «Perdite del kernel» in Sensori | CPU del sensore insufficiente o picchi: aumentate le risorse o filtrate le reti con `HW_CAPTURE_IGNORE` |
-| Accesso bloccato | dopo 5 tentativi errati si attendono 15 minuti; `npm run utente -- reimposta <nome>` |
+| Accesso bloccato | dopo 5 tentativi errati si attendono 15 minuti; `npm run utente -- sblocca <nome>` toglie il blocco |
+| Backup non riuscito | `journalctl -u hyperwave-backup`: il messaggio dice il passo (PostgreSQL, ClickHouse, verifica) e, per ClickHouse, l'errore del server |

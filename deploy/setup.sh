@@ -11,6 +11,7 @@
 #   sudo deploy/setup.sh                     servizi, .env e unità systemd
 #   sudo HW_PROCESS=pm2 deploy/setup.sh      come sopra, ma i processi li gestisce PM2
 #   sudo HW_DEMO=1 deploy/setup.sh           avvia anche il sensore con dati di esempio
+#   sudo deploy/backup.sh                    backup immediato (di solito lo fa il timer)
 #
 # Si può rilanciare: i segreti in .env vengono generati solo la prima volta.
 set -euo pipefail
@@ -168,6 +169,17 @@ else
   step "processi"
   echo "    HW_PROCESS=$HW_PROCESS: nessuna unità systemd. Con PM2: pm2 start ecosystem.config.cjs"
 fi
+
+# ---------------------------------------------------------------- backup
+# Unità di root indipendenti da HW_PROCESS: servono anche con PM2.
+step "backup notturno"
+for u in hyperwave-backup.service hyperwave-backup.timer hyperwave-backup-verifica.service hyperwave-backup-verifica.timer; do
+  sed -e "s#@ROOT@#$ROOT#g" "$ROOT/deploy/systemd/$u" >"/etc/systemd/system/$u"
+done
+systemctl daemon-reload
+systemctl enable --now hyperwave-backup.timer hyperwave-backup-verifica.timer >/dev/null 2>&1
+echo "    ogni notte alle 2:30 in $(envget HW_BACKUP_DIR | grep . || echo /var/backups/hyperwave), verifica completa la domenica"
+echo "    (deploy/backup.sh per lanciarlo subito; .env va salvato a parte)"
 
 cat <<EOF
 
