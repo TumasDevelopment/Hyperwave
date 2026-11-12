@@ -4,6 +4,7 @@ import { ActionForm, Submit } from "@/components/forms";
 import { Card, Country, Empty, Field, Ip, LoadError, PageHead, safe, SeverityBadge, StatusBadge } from "@/components/ui";
 import { addAlertNote, assignAlert, createSuppression, setAlertStatus } from "@/lib/actions/ops";
 import { can, requireUser } from "@/lib/auth";
+import { pcapLink, pcapSensorsFor } from "@/lib/queries/pcap";
 import { fmtAgo, fmtBytes, fmtDateTime, fmtDateTimeFull, fmtNum, fmtTime } from "@/lib/format";
 import { mitreUrl, RESOLUTIONS, STATUS_LABELS } from "@/lib/labels";
 import { deviceNames } from "@/lib/names";
@@ -60,12 +61,13 @@ export default async function AlertPage({ params }: Props) {
   if (!Number.isSafeInteger(id) || id <= 0) notFound();
   const a = await getAlert(id);
   if (!a) notFound();
-  const [notes, related, flows, users, names] = await Promise.all([
+  const [notes, related, flows, users, names, pcapSensors] = await Promise.all([
     alertNotes(id),
     relatedAlerts(a),
     safe(alertFlows(a), [], "flussi dell'allarme"),
     assignableUsers(),
     deviceNames(),
+    pcapSensorsFor(user),
   ]);
   const analyst = can(user, "analyst");
   const mitre = a.mitre ? mitreUrl(a.mitre) : null;
@@ -78,6 +80,16 @@ export default async function AlertPage({ params }: Props) {
     peer: /^[0-9a-f.:/]+$/i.test(a.dst_ip) ? a.dst_ip : "",
   })}`;
   const isIp = (v: string) => /^[0-9a-f.:]+$/i.test(v);
+  const pcapHref = isIp(a.src_ip)
+    ? pcapLink(pcapSensors, {
+        a: a.src_ip,
+        b: isIp(a.dst_ip) ? a.dst_ip : undefined,
+        from: new Date(a.first_seen).getTime() - 60_000,
+        to: new Date(a.last_seen).getTime() + 60_000,
+        alert: a.id,
+        sensor: a.sensor,
+      })
+    : null;
 
   return (
     <>
@@ -96,6 +108,11 @@ export default async function AlertPage({ params }: Props) {
         }
       >
         <SeverityBadge severity={a.severity} /> <StatusBadge status={a.status} />
+        {pcapHref && (
+          <Link className="btn btn--small" href={pcapHref} title="Estrai i pacchetti dal buffer del sensore">
+            Pacchetti
+          </Link>
+        )}
       </PageHead>
 
       <div className="grid-2">

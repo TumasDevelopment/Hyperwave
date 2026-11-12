@@ -28,6 +28,8 @@ func (h *Hub) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/heartbeat", h.handleHeartbeat)
 	mux.HandleFunc("POST /v1/ingest", h.handleIngest)
+	mux.HandleFunc("POST /v1/pcap/{id}/result", h.handlePcapResult)
+	mux.HandleFunc("POST /v1/pcap/{id}/fail", h.handlePcapFail)
 	mux.HandleFunc("GET /healthz", h.handleHealth)
 	return mux
 }
@@ -92,7 +94,9 @@ func (h *Hub) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, model.HubReply{Error: "database non disponibile"})
 		return
 	}
-	writeJSON(w, http.StatusOK, h.reply(s, li))
+	rep := h.reply(s, li)
+	rep.PcapJobs = h.pcapJobs(r.Context(), s)
+	writeJSON(w, http.StatusOK, rep)
 }
 
 func (h *Hub) handleIngest(w http.ResponseWriter, r *http.Request) {

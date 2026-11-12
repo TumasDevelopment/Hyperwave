@@ -81,6 +81,9 @@ func (r *Runner) runCapture(ctx context.Context) error {
 					time.Sleep(100 * time.Millisecond)
 					continue
 				}
+				if r.ring != nil {
+					r.ring.write(ci, data)
+				}
 				p.packet(data, ci, layers.LinkTypeEthernet)
 			}
 		}()
@@ -96,6 +99,9 @@ func (r *Runner) runCapture(ctx context.Context) error {
 			}
 			wg.Wait()
 			// ultimi flussi e ultimo invio, con un limite di tempo
+			if r.ring != nil {
+				r.ring.close()
+			}
 			p.flushAll()
 			stopSink()
 			sinkDone.Wait()
@@ -105,6 +111,9 @@ func (r *Runner) runCapture(ctx context.Context) error {
 			return nil
 		case now := <-t.C:
 			p.tick(now.UnixMilli())
+			if r.ring != nil {
+				r.ring.flush()
+			}
 		}
 	}
 }

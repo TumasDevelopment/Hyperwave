@@ -69,6 +69,10 @@ func main() {
 		FlowAllow:    env.Str("HW_FLOW_ALLOW", ""),
 		FlowSampling: env.Int("HW_FLOW_SAMPLING", 0),
 		ZeekDir:      env.Str("HW_ZEEK_DIR", "/opt/zeek/logs/current"),
+		PcapDir:      pcapDir(),
+		PcapRingMB:   env.Int("HW_PCAP_RING_MB", 4096),
+		PcapHours:    float64(env.Int("HW_PCAP_RING_MINUTES", 120)) / 60,
+		PcapExportMB: env.Int("HW_PCAP_EXPORT_MB", 200),
 	}
 	r, err := sensor.New(cfg, log)
 	if err != nil {
@@ -94,6 +98,22 @@ func spoolDir() string {
 		if state := os.Getenv("STATE_DIRECTORY"); state != "" {
 			dir = filepath.Join(strings.Split(state, ":")[0], "coda")
 		}
+	}
+	return dir
+}
+
+// pcapDir: il buffer dei pacchetti conserva dati personali e occupa disco, quindi è spento finché
+// non lo si chiede: HW_PCAP_DIR=on usa la cartella di stato di systemd, altrimenti un percorso.
+func pcapDir() string {
+	dir := strings.TrimSpace(env.Str("HW_PCAP_DIR", ""))
+	switch strings.ToLower(dir) {
+	case "", "off":
+		return ""
+	case "on":
+		if state := os.Getenv("STATE_DIRECTORY"); state != "" {
+			return filepath.Join(strings.Split(state, ":")[0], "pacchetti")
+		}
+		return ""
 	}
 	return dir
 }

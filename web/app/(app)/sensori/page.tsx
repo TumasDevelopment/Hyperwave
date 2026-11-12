@@ -3,7 +3,7 @@ import { ActionForm, ConfirmSubmit, Submit } from "@/components/forms";
 import { Badge, Card, Empty, Field, PageHead } from "@/components/ui";
 import { createSensor, deleteSensor, rotateSensorToken, updateSensor } from "@/lib/actions/admin";
 import { can, requireUser } from "@/lib/auth";
-import { fmtAgo, fmtDateTime, fmtNum } from "@/lib/format";
+import { fmtAgo, fmtBytes, fmtDateTime, fmtNum } from "@/lib/format";
 import { listSensors, SENSOR_STATE_LABELS, sensorState } from "@/lib/queries/system";
 
 export const metadata = { title: "Sensori" };
@@ -48,6 +48,7 @@ export default async function SensorsPage() {
         {sensors.map((s) => {
           const state = sensorState(s, now);
           const stats = Object.entries(s.stats ?? {}).filter(([, v]) => typeof v === "number");
+          const buffer = (s.stats as Record<string, unknown> | null)?.pcap as { from?: number; to?: number; bytes?: number } | undefined;
           return (
             <Card
               key={s.id}
@@ -78,6 +79,20 @@ export default async function SensorsPage() {
                     <dd className={/drop|full|error/.test(k) && v > 0 ? "text-warn" : undefined}>{fmtNum(v)}</dd>
                   </div>
                 ))}
+                {buffer && (
+                  <>
+                    <dt>Buffer pacchetti</dt>
+                    <dd>
+                      {buffer.from ? (
+                        <>
+                          dal {fmtDateTime(buffer.from)} · {fmtBytes(buffer.bytes ?? 0)}
+                        </>
+                      ) : (
+                        <span className="muted">vuoto</span>
+                      )}
+                    </dd>
+                  </>
+                )}
                 <dt>Aggiunto</dt>
                 <dd>
                   {fmtDateTime(s.created_at)} {s.created_by && `da ${s.created_by}`}

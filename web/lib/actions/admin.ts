@@ -313,3 +313,21 @@ export async function saveNetworkConfig(_state: FormState, form: FormData): Prom
     return failure(error);
   }
 }
+
+/** Ruolo minimo per chiedere e scaricare pacchetti: contengono dati personali, quindi di base solo gli amministratori. */
+export async function setPcapRole(_state: FormState, form: FormData): Promise<FormState> {
+  try {
+    const actor = await actionUser("admin");
+    const role = form.get("pcap_role") === "analyst" ? "analyst" : "admin";
+    await db().query(
+      `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('pcap_role', $1, now(), $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+      [JSON.stringify(role), actor.username],
+    );
+    await audit(actor, "settings.pcap", "", { role });
+    revalidatePath("/", "layout");
+    return { ok: true, message: role === "analyst" ? "Ora anche gli analisti possono estrarre pacchetti." : "Ora solo gli amministratori possono estrarre pacchetti." };
+  } catch (error) {
+    return failure(error);
+  }
+}

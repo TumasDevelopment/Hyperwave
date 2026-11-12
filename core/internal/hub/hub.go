@@ -46,6 +46,8 @@ type Config struct {
 	LearningHours    int
 	Timezone         string
 	LeaderMode       string // auto | never (istanza di sola ricezione)
+	PcapKeepDays     int    // giorni di conservazione dei pacchetti estratti
+	PcapMaxMB        int    // dimensione massima di un'estrazione accettata dall'hub
 }
 
 func ConfigFromEnv() Config {
@@ -71,6 +73,8 @@ func ConfigFromEnv() Config {
 		LearningHours:    env.Int("HW_LEARNING_HOURS", 24),
 		Timezone:         env.Str("HW_TZ", "Europe/Rome"),
 		LeaderMode:       env.Str("HW_HUB_LEADER", "auto"),
+		PcapKeepDays:     env.Int("HW_PCAP_KEEP_DAYS", 7),
+		PcapMaxMB:        env.Int("HW_PCAP_MAX_MB", 200),
 	}
 }
 
@@ -318,6 +322,7 @@ func (h *Hub) Run(ctx context.Context) error {
 	every("sensori", 20*time.Second, leaderOnly(h.checkSensors))
 	every("minacce", 5*time.Minute, leaderOnly(h.intel.tick))
 	every("incidenti", 60*time.Second, leaderOnly(h.correlate))
+	every("pcap", 30*time.Second, leaderOnly(h.expirePcap))
 	every("pulizia", time.Hour, leaderOnly(h.cleanup))
 	if h.cfg.VigilURL != "" {
 		every("vigil", 30*time.Second, leaderOnly(h.checkVigil))

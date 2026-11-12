@@ -40,6 +40,11 @@ type Config struct {
 	FlowAllow    string   // flow: reti degli esportatori ammessi; vuoto = tutti
 	FlowSampling int      // flow: moltiplicatore imposto; 0 = quello dichiarato dagli esportatori
 	ZeekDir      string   // zeek: cartella dei log correnti
+
+	PcapDir      string  // capture: buffer circolare dei pacchetti per le estrazioni; vuoto = spento
+	PcapRingMB   int     // spazio massimo del buffer
+	PcapHours    float64 // età massima dei pacchetti nel buffer
+	PcapExportMB int     // dimensione massima di un'estrazione (pcap non compresso)
 }
 
 // Runner tiene lo stato condiviso tra raccolta, invio e heartbeat.
@@ -54,7 +59,9 @@ type Runner struct {
 	nets       atomic.Pointer[netx.Nets]
 	sent       atomic.Int64
 	started    time.Time
-	sp         *spool // nil se la coda su disco è disattivata
+	sp         *spool      // nil se la coda su disco è disattivata
+	ring       *pcapRing   // nil se il sensore non conserva pacchetti
+	pcap       *pcapWorker // estrazioni richieste dall'hub
 	savedMu    sync.Mutex
 	saved      string // ultimo stato salvato su disco, per scriverlo solo quando cambia
 
@@ -122,6 +129,30 @@ func New(cfg Config, log *slog.Logger) (*Runner, error) {
 		r.addStat("spool_bytes", func() any { _, b, _ := sp.stats(); return b })
 		r.addStat("spool_dropped", func() any { return sp.dropped.Load() })
 	}
+	reason := "il sensore è in modalità " + cfg.Mode + ": solo la cattura da interfaccia (capture) conserva i pacchetti"
+	if cfg.Mode == "capture" {
+		reason = "il buffer dei pacchetti è spento su questo sensore (HW_PCAP_DIR)"
+		if cfg.PcapDir != "" {
+			if cfg.PcapRingMB <= 0 {
+				cfg.PcapRingMB = 4096
+			}
+			if cfg.PcapHours <= 0 {
+				cfg.PcapHours = 2
+			}
+			ring, err := openPcapRing(cfg.PcapDir, cfg.PcapRingMB, cfg.PcapHours, cfg.Snaplen)
+			if err != nil {
+				return nil, fmt.Errorf("buffer dei pacchetti: %w", err)
+			}
+			r.cfg, r.ring = cfg, ring
+			log.Info("buffer dei pacchetti attivo", "cartella", cfg.PcapDir, "limite_mb", cfg.PcapRingMB, "ore", cfg.PcapHours)
+			// l'interfaccia mostra il periodo disponibile e accetta richieste solo se c'è
+			r.addStat("pcap", func() any {
+				from, to, bytes := ring.window()
+				return map[string]int64{"from": from, "to": to, "bytes": bytes}
+			})
+		}
+	}
+	r.pcap = newPcapWorker(r, r.ring, reason, cfg.PcapExportMB)
 	return r, nil
 }
 
@@ -136,6 +167,9 @@ func (r *Runner) addStat(name string, f func() any) {
 // apply recepisce lo stato comunicato dall'hub: live, reti interne, ultimo dato ricevuto.
 func (r *Runner) apply(rep model.HubReply) {
 	r.live.Store(rep.Live)
+	if len(rep.PcapJobs) > 0 && r.pcap != nil {
+		r.pcap.enqueue(rep.PcapJobs)
+	}
 	if len(rep.InternalNets) > 0 {
 		n := netx.ParseNets(strings.Join(rep.InternalNets, ","))
 		if len(n) > 0 {
@@ -240,6 +274,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		wait = min(wait*2, time.Minute)
 	}
 	r.log.Info("collegato all'hub", "live", r.live.Load(), "reti_interne", strings.Join(r.Nets().Strings(), ","))
+	go r.pcap.run(ctx)
 
 	go func() {
 		t := time.NewTicker(10 * time.Second)

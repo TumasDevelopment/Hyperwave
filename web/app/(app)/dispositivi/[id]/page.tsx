@@ -11,6 +11,7 @@ import { deviceNames } from "@/lib/names";
 import { deviceAlerts } from "@/lib/queries/alerts";
 import { sessionsFor } from "@/lib/queries/analysis";
 import { deviceDomains, devicePeers, deviceServices, deviceTraffic, getDevice } from "@/lib/queries/devices";
+import { pcapLink, pcapSensorsFor } from "@/lib/queries/pcap";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -27,7 +28,7 @@ export default async function DevicePage({ params }: Props) {
   const d = await getDevice(id);
   if (!d) notFound();
   const ips = [...new Set([d.ip, ...d.ips].filter(Boolean))];
-  const [services, traffic, peers, domains, alerts, names, sessions] = await Promise.all([
+  const [services, traffic, peers, domains, alerts, names, sessions, pcapSensors] = await Promise.all([
     deviceServices(id),
     safe(deviceTraffic(ips), [], "traffico del dispositivo"),
     safe(devicePeers(ips), [], "interlocutori"),
@@ -35,9 +36,12 @@ export default async function DevicePage({ params }: Props) {
     deviceAlerts(id, ips),
     deviceNames(),
     safe(sessionsFor(ips), [], "sessioni"),
+    pcapSensorsFor(user),
   ]);
   const analyst = can(user, "analyst");
   const title = d.name || d.hostname || d.ip || d.mac;
+  const lastSeen = new Date(d.last_seen).getTime();
+  const pcapHref = d.ip ? pcapLink(pcapSensors, { a: d.ip, from: lastSeen - 15 * 60_000, to: lastSeen + 60_000 }) : null;
 
   return (
     <>
@@ -52,6 +56,11 @@ export default async function DevicePage({ params }: Props) {
         {d.ip && (
           <Link className="btn btn--small" href={`/flussi?range=24h&ip=${encodeURIComponent(d.ip)}`}>
             Flussi delle 24 h
+          </Link>
+        )}
+        {pcapHref && (
+          <Link className="btn btn--small" href={pcapHref} title="Estrai i pacchetti dal buffer del sensore">
+            Pacchetti
           </Link>
         )}
       </PageHead>

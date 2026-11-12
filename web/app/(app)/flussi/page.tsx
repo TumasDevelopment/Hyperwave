@@ -5,6 +5,7 @@ import { fmtBytes, fmtDateTimeFull, fmtNum, fmtTime } from "@/lib/format";
 import { DIRECTION_LABELS } from "@/lib/labels";
 import { deviceNames } from "@/lib/names";
 import { flowFilterQuery, knownApps, parseFlowFilter, searchFlows, summarizeFlows } from "@/lib/queries/flows";
+import { canPcap, pcapSensors } from "@/lib/queries/pcap";
 import { listSensors } from "@/lib/queries/system";
 import { RANGES } from "@/lib/ranges";
 
@@ -15,15 +16,18 @@ type Props = { searchParams: Promise<Record<string, string | string[] | undefine
 const LIMIT = 500;
 
 export default async function FlowsPage({ searchParams }: Props) {
-  await requireUser();
+  const user = await requireUser();
   const f = parseFlowFilter(await searchParams);
-  const [flows, summary, apps, names, sensors] = await Promise.all([
+  const [flows, summary, apps, names, sensors, pcap] = await Promise.all([
     safe(searchFlows(f, LIMIT), [], "flussi"),
     safe(summarizeFlows(f), { flows: 0, bytes: 0, hosts: 0, failed: 0 }, "riepilogo flussi"),
     safe(knownApps(), [], "applicazioni"),
     deviceNames(),
     listSensors(),
+    canPcap(user).then((ok) => (ok ? pcapSensors() : [])).catch(() => []),
   ]);
+  // sensori che hanno ancora i pacchetti di un flusso: link diretto all'estrazione
+  const pcapFrom = new Map(pcap.filter((s) => s.online && s.from).map((s) => [s.id, s.from]));
   const query = flowFilterQuery(f);
   const filtered = query.replace(/(^|&)range=[^&]*/, "") !== "";
 
@@ -160,7 +164,14 @@ export default async function FlowsPage({ searchParams }: Props) {
               </thead>
               <tbody>
                 {flows.data.map((r, i) => {
-                  const seconds = (new Date(`${r.ts_end.replace(" ", "T")}Z`).getTime() - new Date(`${r.ts.replace(" ", "T")}Z`).getTime()) / 1000;
+                  const t0 = new Date(`${r.ts.replace(" ", "T")}Z`).getTime();
+                  const t1 = new Date(`${r.ts_end.replace(" ", "T")}Z`).getTime();
+                  const seconds = (t1 - t0) / 1000;
+                  const bufferFrom = pcapFrom.get(r.sensor_id);
+                  const pcapHref =
+                    bufferFrom && t1 >= bufferFrom
+                      ? `/pacchetti?${new URLSearchParams({ sensor: String(r.sensor_id), a: r.src, b: r.dst, port: String(r.dport || ""), proto: r.proto.toLowerCase(), from: String(t0 - 5000), to: String(t1 + 5000) })}`
+                      : "";
                   return (
                     <tr key={`${r.ts}-${r.src}-${r.sport}-${i}`}>
                       <td className="mono nowrap" title={fmtDateTimeFull(r.ts)}>
@@ -193,6 +204,11 @@ export default async function FlowsPage({ searchParams }: Props) {
                           {r.rtt > 0 && ` · ${fmtNum(Math.round(r.rtt))} ms`}
                           {r.retrans > 0 && ` · ${r.retrans} ritrasm.`}
                         </div>
+                        {pcapHref && (
+                          <Link href={pcapHref} className="small" title="Estrai i pacchetti di questa connessione">
+                            Pacchetti
+                          </Link>
+                        )}
                       </td>
                     </tr>
                   );

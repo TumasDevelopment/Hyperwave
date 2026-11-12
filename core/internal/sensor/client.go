@@ -115,3 +115,55 @@ func (c *Client) Send(ctx context.Context, b *model.Batch) (model.HubReply, erro
 		}
 	}
 }
+
+// PcapUpload invia all'hub il file dei pacchetti estratti (pcap compresso con gzip).
+func (c *Client) PcapUpload(ctx context.Context, id int64, res *pcapResult) error {
+	f, err := os.Open(res.path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/v1/pcap/%d/result", c.base, id), f)
+	if err != nil {
+		return err
+	}
+	req.ContentLength = st.Size()
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/vnd.tcpdump.pcap")
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("User-Agent", "hw-sensor/"+version.Version)
+	req.Header.Set("X-HW-Packets", fmt.Sprint(res.packets))
+	req.Header.Set("X-HW-Bytes", fmt.Sprint(res.bytes))
+	req.Header.Set("X-HW-SHA256", res.sha256)
+	if res.truncated {
+		req.Header.Set("X-HW-Truncated", "1")
+	}
+	// un caricamento grande può richiedere più del limite delle chiamate normali
+	hc := *c.http
+	hc.Timeout = 15 * time.Minute
+	r, err := hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		var rep model.HubReply
+		json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&rep)
+		return fmt.Errorf("hub %d: %s", r.StatusCode, rep.Error)
+	}
+	return nil
+}
+
+// PcapFail comunica all'hub che un'estrazione non si può fare, con il motivo.
+func (c *Client) PcapFail(ctx context.Context, id int64, reason string) {
+	fctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if len(reason) > 500 {
+		reason = reason[:500]
+	}
+	c.post(fctx, fmt.Sprintf("/v1/pcap/%d/fail", id), map[string]string{"error": reason})
+}

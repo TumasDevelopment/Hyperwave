@@ -133,13 +133,14 @@ type Heartbeat struct {
 
 // HubReply è la risposta dell'hub a heartbeat e ingest.
 type HubReply struct {
-	OK           bool     `json:"ok"`
-	Live         bool     `json:"live"`
-	Accepted     int      `json:"accepted,omitempty"`
-	InternalNets []string `json:"internal_nets,omitempty"`
-	ServerTime   int64    `json:"server_time,omitempty"`
-	LastIngest   int64    `json:"last_ingest,omitempty"` // ultimo dato ricevuto da questo sensore (ms)
-	Error        string   `json:"error,omitempty"`
+	OK           bool      `json:"ok"`
+	Live         bool      `json:"live"`
+	Accepted     int       `json:"accepted,omitempty"`
+	InternalNets []string  `json:"internal_nets,omitempty"`
+	ServerTime   int64     `json:"server_time,omitempty"`
+	LastIngest   int64     `json:"last_ingest,omitempty"` // ultimo dato ricevuto da questo sensore (ms)
+	PcapJobs     []PcapJob `json:"pcap_jobs,omitempty"`   // estrazioni di pacchetti richieste a questo sensore
+	Error        string    `json:"error,omitempty"`
 }
 
 // Limiti del protocollo, uguali per hub e sensore.
@@ -168,4 +169,17 @@ type Session struct {
 	ServerHash string `json:"shash,omitempty"` // impronta del server (HASSHServer)
 	Info       string `json:"info,omitempty"`  // dialetto, condivisioni, esito...
 	Weak       string `json:"weak,omitempty"`  // perché la sessione è debole: vuoto se non lo è
+}
+
+// PcapJob è una richiesta di estrazione dei pacchetti dal buffer del sensore.
+// Vale un pacchetto in cui A è origine o destinazione e, se indicati, B è l'altro capo,
+// Port una delle due porte e Proto il protocollo (tcp, udp, icmp).
+type PcapJob struct {
+	ID    int64  `json:"id"`
+	A     string `json:"a"`
+	B     string `json:"b,omitempty"`
+	Port  uint16 `json:"port,omitempty"`
+	Proto string `json:"proto,omitempty"`
+	From  int64  `json:"from"` // ms
+	To    int64  `json:"to"`
 }

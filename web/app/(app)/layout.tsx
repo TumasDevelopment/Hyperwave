@@ -5,10 +5,11 @@ import { Nav, type NavItem } from "@/components/Nav";
 import { logout } from "@/lib/actions/session";
 import { can, requireUser, ROLE_LABELS } from "@/lib/auth";
 import { db, setting } from "@/lib/db";
+import { canPcap } from "@/lib/queries/pcap";
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const user = await requireUser({ allowMustChange: true });
-  const [live, open, incidents] = await Promise.all([
+  const [live, open, incidents, pcap] = await Promise.all([
     setting<boolean>("live", true).catch(() => true),
     db()
       .query<{ n: number }>("SELECT count(*)::int AS n FROM alerts WHERE status = 'open'")
@@ -18,6 +19,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       .query<{ n: number }>("SELECT count(*)::int AS n FROM incidents WHERE status = 'open'")
       .then((r) => r.rows[0]?.n ?? 0)
       .catch(() => 0),
+    canPcap(user).catch(() => false),
   ]);
 
   const items: NavItem[] = user.mustChange
@@ -31,6 +33,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         { href: "/incidenti", label: "Incidenti", icon: "incidents", badge: incidents },
         { href: "/minacce", label: "Minacce note", icon: "intel" },
         { href: "/analisi", label: "Analisi", icon: "analysis" },
+        ...(pcap ? [{ href: "/pacchetti", label: "Pacchetti", icon: "pcap" as const }] : []),
+        ...(can(user, "analyst") ? [{ href: "/rapporti", label: "Rapporti", icon: "reports" as const }] : []),
         { href: "/regole", label: "Regole", icon: "rules" },
         { href: "/sensori", label: "Sensori", icon: "sensors" },
         ...(can(user, "admin") ? [{ href: "/impostazioni", label: "Impostazioni", icon: "settings" as const }] : []),

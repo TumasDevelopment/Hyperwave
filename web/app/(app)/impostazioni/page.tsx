@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { ActionForm, Submit } from "@/components/forms";
 import { Badge, Card, Field, LoadError, PageHead, safe, Tabs } from "@/components/ui";
-import { saveNetworkConfig, setLive } from "@/lib/actions/admin";
+import { saveNetworkConfig, setLive, setPcapRole } from "@/lib/actions/admin";
 import { requireRole } from "@/lib/auth";
 import { fmtAgo, fmtBytes, fmtDateTime, fmtDuration, fmtNum } from "@/lib/format";
+import { pcapRole } from "@/lib/queries/pcap";
 import { hubHealth, pgSize, secretStatus, storageUsage, systemSettings } from "@/lib/queries/system";
 import { hasSecretKey } from "@/lib/secretbox.mjs";
 import { SETTINGS_TABS } from "@/lib/settings-tabs";
@@ -24,12 +25,13 @@ const TABLE_LABELS: Record<string, string> = {
 
 export default async function SettingsPage() {
   await requireRole("admin");
-  const [settings, health, storage, pg, secrets] = await Promise.all([
+  const [settings, health, storage, pg, secrets, pcap] = await Promise.all([
     systemSettings(),
     hubHealth(),
     safe(storageUsage(), [], "spazio ClickHouse"),
     pgSize().catch(() => 0),
     secretStatus().catch(() => ({ key: hasSecretKey(), total: 0, plain: 0 })),
+    pcapRole(),
   ]);
   const { live, config, vigil, cursor, liveChanged } = settings;
   const lag = cursor ? (Date.now() - cursor) / 1000 : null;
@@ -150,6 +152,20 @@ export default async function SettingsPage() {
           </Field>
           <Field label="Fuso orario" hint="Per le regole notturne. Vuoto = valore di .env (HW_TZ).">
             <input name="timezone" defaultValue={config.timezone ?? ""} placeholder="Europe/Rome" />
+          </Field>
+          <div className="field--wide">
+            <Submit>Salva</Submit>
+          </div>
+        </ActionForm>
+      </Card>
+
+      <Card title="Pacchetti">
+        <ActionForm action={setPcapRole} className="form-grid">
+          <Field label="Chi può estrarre e scaricare pacchetti" hint="I pacchetti contengono dati personali: ogni richiesta e ogni download finiscono nel registro.">
+            <select name="pcap_role" defaultValue={pcap}>
+              <option value="admin">Solo gli amministratori</option>
+              <option value="analyst">Analisti e amministratori</option>
+            </select>
           </Field>
           <div className="field--wide">
             <Submit>Salva</Submit>
