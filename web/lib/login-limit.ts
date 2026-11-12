@@ -1,47 +1,38 @@
 import "server-only";
+import { db } from "./db";
 
-// Basta tenerlo in memoria: il sito gira in un solo processo.
-const WINDOW_MS = 15 * 60_000;
+// I conteggi stanno in PostgreSQL: valgono per tutte le istanze dell'interfaccia e restano dopo un riavvio.
+const WINDOW_MINUTES = 15;
 const MAX_PER_ACCOUNT = 5;
 const MAX_PER_ADDRESS = 20;
 
-const failures = new Map<string, { count: number; resetAt: number }>();
-
-function read(key: string, now: number) {
-  const entry = failures.get(key);
-  if (!entry || entry.resetAt <= now) return null;
-  return entry;
-}
-
-function bump(key: string, now: number) {
-  const entry = read(key, now);
-  if (entry) entry.count += 1;
-  else failures.set(key, { count: 1, resetAt: now + WINDOW_MS });
-}
+const accountKey = (address: string, username: string) => `u:${address}:${username.toLowerCase()}`;
+const addressKey = (address: string) => `a:${address}`;
 
 /** Minuti da attendere prima di riprovare, oppure 0 se il tentativo è ammesso. */
-export function lockedMinutes(address: string, username: string) {
-  const now = Date.now();
-  const account = read(`u:${address}:${username.toLowerCase()}`, now);
-  const source = read(`a:${address}`, now);
-  const blocked = [
-    account && account.count >= MAX_PER_ACCOUNT ? account : null,
-    source && source.count >= MAX_PER_ADDRESS ? source : null,
-  ].filter((entry) => entry !== null);
-
-  if (blocked.length === 0) return 0;
-  return Math.ceil((Math.max(...blocked.map((entry) => entry.resetAt)) - now) / 60_000);
+export async function lockedMinutes(address: string, username: string): Promise<number> {
+  const { rows } = await db().query<{ wait: number | null }>(
+    `SELECT ceil(extract(epoch FROM max(reset_at) - now()) / 60)::int AS wait
+       FROM login_failures
+      WHERE reset_at > now()
+        AND ((key = $1 AND count >= $3) OR (key = $2 AND count >= $4))`,
+    [accountKey(address, username), addressKey(address), MAX_PER_ACCOUNT, MAX_PER_ADDRESS],
+  );
+  return Math.max(rows[0]?.wait ?? 0, 0);
 }
 
-export function recordFailure(address: string, username: string) {
-  const now = Date.now();
-  if (failures.size > 5000) {
-    for (const [key, entry] of failures) if (entry.resetAt <= now) failures.delete(key);
-  }
-  bump(`u:${address}:${username.toLowerCase()}`, now);
-  bump(`a:${address}`, now);
+/** Conta un tentativo fallito per la coppia indirizzo-utente e per l'indirizzo, in una sola istruzione atomica. */
+export async function recordFailure(address: string, username: string) {
+  await db().query(
+    `INSERT INTO login_failures AS f (key, count, reset_at)
+     SELECT k, 1, now() + make_interval(mins => $2) FROM unnest($1::text[]) AS k
+     ON CONFLICT (key) DO UPDATE SET
+       count    = CASE WHEN f.reset_at <= now() THEN 1 ELSE f.count + 1 END,
+       reset_at = CASE WHEN f.reset_at <= now() THEN EXCLUDED.reset_at ELSE f.reset_at END`,
+    [[accountKey(address, username), addressKey(address)], WINDOW_MINUTES],
+  );
 }
 
-export function clearFailures(address: string, username: string) {
-  failures.delete(`u:${address}:${username.toLowerCase()}`);
+export async function clearFailures(address: string, username: string) {
+  await db().query("DELETE FROM login_failures WHERE key = $1", [accountKey(address, username)]);
 }

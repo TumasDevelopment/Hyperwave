@@ -28,7 +28,7 @@ export async function login(_state: FormState, form: FormData): Promise<FormStat
   if (!username || !password) return { error: "Inserisci nome utente e password." };
 
   const address = await clientAddress();
-  const wait = lockedMinutes(address, username);
+  const wait = await lockedMinutes(address, username);
   if (wait > 0) {
     await audit({ username }, "login.locked", username);
     return { error: `Troppi tentativi non riusciti. Riprova tra ${wait} ${wait === 1 ? "minuto" : "minuti"}.` };
@@ -42,11 +42,11 @@ export async function login(_state: FormState, form: FormData): Promise<FormStat
   dummyHash ??= hashPassword(randomBytes(16).toString("hex"));
   const valid = await verifyPassword(password, user?.password_hash ?? (await dummyHash));
   if (!user || !valid || user.disabled) {
-    recordFailure(address, username);
+    await recordFailure(address, username);
     await audit({ username }, "login.failed", username, user?.disabled ? { reason: "disabled" } : {});
     return { error: "Nome utente o password non corretti." };
   }
-  clearFailures(address, username);
+  await clearFailures(address, username);
 
   if (user.totp_enabled) {
     await createLoginChallenge(Number(user.id));

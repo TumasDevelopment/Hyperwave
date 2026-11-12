@@ -3,7 +3,7 @@
 //
 //   npm run utente -- aggiungi <nome> [--ruolo admin|analyst|viewer] [--genera-in FILE]
 //   npm run utente -- reimposta <nome> [--genera-in FILE]     nuova password temporanea, chiude le sessioni
-//   npm run utente -- sblocca <nome>                          riattiva un utente disattivato
+//   npm run utente -- sblocca <nome>                          riattiva un utente disattivato e azzera i tentativi falliti
 //   npm run utente -- togli-2fa <nome>                        disattiva i due fattori (telefono perso)
 //   npm run utente -- elenco
 //   npm run utente -- cifra-segreti                           cifra i segreti 2FA (dopo l'aggiornamento o un cambio di chiave)
@@ -152,11 +152,13 @@ async function main() {
     }
     if (command === "sblocca") {
       await client.query("UPDATE users SET disabled = false WHERE id = $1", [id]);
+      // azzera anche i tentativi falliti: l'utente può riprovare subito da qualsiasi indirizzo
+      await client.query("DELETE FROM login_failures WHERE starts_with(key, 'u:') AND right(key, length($1) + 1) = ':' || lower($1)", [username]);
       await client.query("INSERT INTO audit_log (username, action, target, detail) VALUES ('(console)', 'user.update', $1, $2)", [
         username,
         JSON.stringify({ disabled: false, cli: true }),
       ]);
-      console.log(`Utente ${username} riattivato.`);
+      console.log(`Utente ${username} riattivato e tentativi di accesso azzerati.`);
       return;
     }
     if (command === "togli-2fa") {
