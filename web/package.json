@@ -16,6 +16,7 @@
     "geist": "1.9.2",
     "nats": "2.29.3",
     "next": "16.4.2",
+    "pdfkit": "^0.20.2",
     "pg": "^8.23.1",
     "qrcode-generator": "^1.4.4",
     "react": "19.3.0",
@@ -25,6 +26,7 @@
   },
   "devDependencies": {
     "@types/node": "^24",
+    "@types/pdfkit": "^0.17.7",
     "@types/pg": "^8",
     "@types/react": "^19",
     "@types/react-dom": "^19",

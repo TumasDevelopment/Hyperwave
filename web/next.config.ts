@@ -8,7 +8,7 @@ if (existsSync("../.env")) process.loadEnvFile("../.env");
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   env: { NEXT_PUBLIC_HW_TZ: process.env.HW_TZ || process.env.NEXT_PUBLIC_HW_TZ || "Europe/Rome" },
-  serverExternalPackages: ["pg", "nats"],
+  serverExternalPackages: ["pg", "nats", "pdfkit"],
   turbopack: { root: process.cwd() },
   async headers() {
     // HSTS si imposta in nginx, quando tutto il dominio è in HTTPS
