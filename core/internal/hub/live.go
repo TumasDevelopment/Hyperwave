@@ -112,15 +112,51 @@ func (l *livePublisher) batch(s *Sensor, flows []any, b *model.Batch) {
 	}
 }
 
+// liveRatesSubject: le istanze che non sono capo inviano qui la banda dei sensori che ricevono.
+const liveRatesSubject = "hw.internal.rates"
+
+type forwardedRate struct {
+	ID int64 `json:"id"`
+	liveRate
+	Age int64 `json:"age_ms"` // da quanto è arrivata all'istanza che la inoltra
+}
+
+// mergeRates riceve sul capo la banda inoltrata dalle altre istanze.
+func (l *livePublisher) mergeRates(data []byte) {
+	var list []forwardedRate
+	if json.Unmarshal(data, &list) != nil {
+		return
+	}
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, f := range list {
+		r := f.liveRate
+		r.received = now.Add(-time.Duration(f.Age) * time.Millisecond)
+		if cur, ok := l.rates[f.ID]; ok && cur.received.After(r.received) {
+			continue
+		}
+		l.rates[f.ID] = r
+	}
+}
+
+// publishState pubblica lo stato complessivo. Lo fa solo il capo, che somma la banda di tutte
+// le istanze; le altre gli inoltrano la propria, così il browser riceve un solo totale.
 func (l *livePublisher) publishState() {
 	now := time.Now()
+	leader := l.h.lead == nil || l.h.lead.Is()
 	l.mu.Lock()
 	var in, out, internal, pps float64
 	var flows, drops uint64
 	sensors := 0
+	var fwd []forwardedRate
 	for id, r := range l.rates {
 		if now.Sub(r.received) > 30*time.Second {
 			delete(l.rates, id)
+			continue
+		}
+		if !leader {
+			fwd = append(fwd, forwardedRate{ID: id, liveRate: r, Age: now.Sub(r.received).Milliseconds()})
 			continue
 		}
 		in, out, internal, pps = in+r.BpsIn, out+r.BpsOut, internal+r.BpsInt, pps+r.Pps
@@ -129,6 +165,12 @@ func (l *livePublisher) publishState() {
 		sensors++
 	}
 	l.mu.Unlock()
+	if !leader {
+		if len(fwd) > 0 {
+			l.pub(liveRatesSubject, fwd)
+		}
+		return
+	}
 	l.pub("hw.live.state", map[string]any{
 		"ts": now.UnixMilli(), "live": l.h.state.Live(), "sensors_sending": sensors,
 		"bps_in": in, "bps_out": out, "bps_int": internal, "pps": pps, "flows": flows, "drops": drops,

@@ -17,12 +17,6 @@ import (
 	"hyperwave/internal/version"
 )
 
-// watermark segue l'avanzamento dello storico inviato da un sensore.
-type watermark struct {
-	ts atomic.Int64 // dato più recente dell'ultimo batch storico
-	at atomic.Int64 // quando è arrivato
-}
-
 type ingestStats struct {
 	batches  atomic.Int64
 	records  atomic.Int64
@@ -159,6 +153,7 @@ func (h *Hub) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"postgres": pgOK, "clickhouse": chOK, "nats": natsOK, "live": h.state.Live(),
 		"batches": h.ingest.batches.Load(), "records": h.ingest.records.Load(), "rejected": h.ingest.rejected.Load(),
 		"last_error": lastErr,
+		"leader":     h.lead.Is(), "leader_mode": h.cfg.LeaderMode,
 	})
 }
 
@@ -401,16 +396,19 @@ func (h *Hub) store(ctx context.Context, s *Sensor, b *model.Batch) (n int, maxT
 
 	h.intel.scan(s, b)
 	h.inv.add(s, b, nets)
-	if minTS > 0 {
-		h.eng.lateData(minTS)
-	}
+	h.eng.lateData(ctx, minTS)
+	// L'avanzamento dello storico sta in PostgreSQL: il motore gira sul capo, che può non essere
+	// l'istanza che riceve il lotto. h.marks ricorda solo quali sensori stanno mandando storico qui.
 	if b.Backfill {
-		v, _ := h.marks.LoadOrStore(s.ID, &watermark{})
-		m := v.(*watermark)
-		m.ts.Store(maxTS)
-		m.at.Store(now)
+		if _, err := h.pg.Exec(ctx, `INSERT INTO backfill_marks (sensor_id, ts, at) VALUES ($1, $2, now())
+			ON CONFLICT (sensor_id) DO UPDATE SET ts = EXCLUDED.ts, at = now()`, s.ID, maxTS); err != nil {
+			h.log.Warn("avanzamento dello storico", "sensor", s.Name, "err", err)
+		}
+		h.marks.Store(s.ID, true)
 	} else {
-		h.marks.Delete(s.ID)
+		if _, was := h.marks.LoadAndDelete(s.ID); was {
+			h.pg.Exec(ctx, "DELETE FROM backfill_marks WHERE sensor_id = $1", s.ID)
+		}
 		h.live.batch(s, flows, b)
 	}
 	return n, maxTS, nil

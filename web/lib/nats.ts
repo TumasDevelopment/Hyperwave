@@ -6,7 +6,11 @@ const globalForNats = globalThis as unknown as { hwNats?: Promise<NatsConnection
 
 export function nats(): Promise<NatsConnection> {
   if (!globalForNats.hwNats) {
-    const servers = (process.env.NATS_URL || "nats://127.0.0.1:4222").replace(/^nats:\/\//, "");
+    // Con un cluster NATS_URL elenca più server separati da virgole, come per l'hub.
+    const servers = (process.env.NATS_URL || "nats://127.0.0.1:4222")
+      .split(",")
+      .map((s) => s.trim().replace(/^nats:\/\//, ""))
+      .filter(Boolean);
     const pending = connect({
       servers,
       token: process.env.NATS_TOKEN || undefined,

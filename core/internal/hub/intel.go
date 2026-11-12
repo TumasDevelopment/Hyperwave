@@ -652,7 +652,12 @@ func (in *intel) tick(ctx context.Context) error {
 			in.h.log.Warn("aggiornamento elenco di minaccia", "id", id, "err", err)
 		}
 	}
-	if len(ids) == 0 && time.Since(time.UnixMilli(in.loadedAt.Load())) > 15*time.Minute {
+	return nil
+}
+
+// refresh rilegge gli indicatori se la copia in memoria ha più di 15 minuti (tutte le istanze).
+func (in *intel) refresh(ctx context.Context) error {
+	if time.Since(time.UnixMilli(in.loadedAt.Load())) > 15*time.Minute {
 		return in.load(ctx)
 	}
 	return nil
@@ -719,6 +724,10 @@ func (in *intel) fetch(ctx context.Context, id int64) error {
 	in.h.log.Info("elenco di minaccia aggiornato", "elenco", name, "indicatori", len(inds), "nuovi", len(added))
 	if err := in.load(ctx); err != nil {
 		return err
+	}
+	// le altre istanze dell'hub rileggono gli indicatori subito, senza aspettare il loro giro
+	if len(added) > 0 && in.h.nc != nil {
+		in.h.nc.Publish("hw.control.intel", []byte("{}"))
 	}
 	if enabled && len(added) > 0 {
 		go in.retro(context.WithoutCancel(ctx), id, added)
@@ -917,6 +926,10 @@ func (in *intel) control(ctx context.Context, data []byte) {
 	_ = json.Unmarshal(data, &cmd)
 	if err := in.load(ctx); err != nil {
 		in.h.log.Warn("rilettura elenchi di minaccia", "err", err)
+	}
+	// scaricamento e ricerca nello storico li fa solo il capo, le altre istanze rileggono e basta
+	if !in.h.lead.Is() {
+		return
 	}
 	bg := context.WithoutCancel(ctx)
 	if cmd.Fetch > 0 {

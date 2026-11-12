@@ -50,8 +50,6 @@ type Engine struct {
 	rules  map[string]ruleState
 	cursor int64
 
-	late atomic.Int64 // dato più vecchio arrivato dopo il cursore, 0 = nessuno
-
 	resMu     sync.Mutex
 	resolvers []string
 	resAt     time.Time
@@ -174,17 +172,36 @@ func (e *Engine) reloadRules(ctx context.Context) {
 	e.mu.Unlock()
 }
 
-// lateData segnala che sono arrivati dati più vecchi del cursore: verranno rianalizzati.
-func (e *Engine) lateData(minTS int64) {
-	for {
-		cur := e.late.Load()
-		if cur != 0 && cur <= minTS {
-			return
-		}
-		if e.late.CompareAndSwap(cur, minTS) {
-			return
-		}
+// lateData segnala che sono arrivati dati vecchi: il capo li rianalizzerà. Il segnale passa
+// da PostgreSQL perché il lotto può arrivare a un'istanza diversa da quella che esegue il motore.
+// I dati in tempo reale (meno di 5 minuti) li coprono già le finestre mobili; lo storico arriva
+// a lotti grandi, quindi una scrittura per lotto non pesa.
+func (e *Engine) lateData(ctx context.Context, minTS int64) {
+	if minTS <= 0 || minTS > time.Now().Add(-5*time.Minute).UnixMilli() {
+		return
 	}
+	_, err := e.h.pg.Exec(ctx, `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('engine_late', to_jsonb($1::bigint), now(), 'hub')
+		ON CONFLICT (key) DO UPDATE SET value = to_jsonb(LEAST(settings.value::bigint, $1::bigint)), updated_at = now()`, minTS)
+	if err != nil {
+		e.h.log.Warn("segnalazione dei dati in ritardo", "err", err)
+	}
+}
+
+// takeLate legge e azzera il dato in ritardo più vecchio segnalato da tutte le istanze.
+func (e *Engine) takeLate(ctx context.Context) int64 {
+	var late int64
+	err := e.h.pg.QueryRow(ctx, "DELETE FROM settings WHERE key = 'engine_late' RETURNING value::bigint").Scan(&late)
+	if err != nil {
+		return 0
+	}
+	return late
+}
+
+// resetCursor fa rileggere il cursore dal database: serve quando un'istanza diventa capo.
+func (e *Engine) resetCursor() {
+	e.mu.Lock()
+	e.cursor = 0
+	e.mu.Unlock()
 }
 
 func alignMinute(ms int64) int64 { return ms - ms%60_000 }
@@ -231,16 +248,14 @@ func (e *Engine) saveCursor(ctx context.Context, c int64) error {
 
 // limit è il punto fin dove i dati sono completi: 90 secondi fa (i flussi arrivano quando si chiudono),
 // oppure prima se un sensore sta ancora inviando lo storico.
-func (e *Engine) limit() int64 {
+func (e *Engine) limit(ctx context.Context) int64 {
 	lim := time.Now().Add(-90 * time.Second).UnixMilli()
-	now := time.Now().UnixMilli()
-	e.h.marks.Range(func(_, v any) bool {
-		m := v.(*watermark)
-		if now-m.at.Load() < 2*60_000 {
-			lim = min(lim, m.ts.Load()-60_000)
-		}
-		return true
-	})
+	// avanzamento dello storico di tutti i sensori, scritto da qualunque istanza lo riceva;
+	// un sensore che non manda storico da 2 minuti non trattiene più il motore
+	var oldest *int64
+	if err := e.h.pg.QueryRow(ctx, "SELECT min(ts) FROM backfill_marks WHERE at > now() - interval '2 minutes'").Scan(&oldest); err == nil && oldest != nil {
+		lim = min(lim, *oldest-60_000)
+	}
 	return alignMinute(lim)
 }
 
@@ -255,12 +270,12 @@ func (e *Engine) tick(ctx context.Context) error {
 	}
 	floor := alignMinute(time.Now().Add(-24 * time.Hour).UnixMilli())
 	// Un ritardo di pochi minuti lo coprono già le finestre mobili: si torna indietro solo per lo storico.
-	if late := e.late.Swap(0); late != 0 && late < cursor-3*60_000 {
+	if late := e.takeLate(ctx); late != 0 && late < cursor-3*60_000 {
 		cursor = max(alignMinute(late), floor)
 	}
 	cursor = max(cursor, floor)
 	deadline := time.Now().Add(45 * time.Second)
-	limit := e.limit()
+	limit := e.limit(ctx)
 	for time.Now().Before(deadline) && ctx.Err() == nil {
 		step := int64(60_000)
 		if limit-cursor > 10*60_000 {

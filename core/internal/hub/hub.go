@@ -45,6 +45,7 @@ type Config struct {
 	VigilURL         string
 	LearningHours    int
 	Timezone         string
+	LeaderMode       string // auto | never (istanza di sola ricezione)
 }
 
 func ConfigFromEnv() Config {
@@ -69,6 +70,7 @@ func ConfigFromEnv() Config {
 		VigilURL:         strings.TrimRight(env.Str("VIGIL_URL", ""), "/"),
 		LearningHours:    env.Int("HW_LEARNING_HOURS", 24),
 		Timezone:         env.Str("HW_TZ", "Europe/Rome"),
+		LeaderMode:       env.Str("HW_HUB_LEADER", "auto"),
 	}
 }
 
@@ -85,10 +87,11 @@ type Hub struct {
 	eng        *Engine
 	live       *livePublisher
 	auth       *sensorAuth
+	lead       *leadership
 	supp       *suppressions
 	intel      *intel
 	customBusy atomic.Bool // prova di una regola personalizzata in corso
-	marks      sync.Map    // sensorID → *watermark (avanzamento del backfill)
+	marks      sync.Map    // sensorID → true se il sensore sta mandando storico a questa istanza
 	start      time.Time
 	ingest     ingestStats
 }
@@ -172,10 +175,22 @@ func Connect(ctx context.Context, cfg Config, log *slog.Logger) (*Hub, error) {
 	}
 	h.nc = nc
 	h.live = newLivePublisher(h)
+	if h.lead, err = newLeadership(cfg.DatabaseURL, cfg.LeaderMode); err != nil {
+		return nil, err
+	}
+	h.lead.onGain = func() {
+		// un'altra istanza può aver fatto avanzare il cursore del motore: si rilegge dal database
+		h.eng.resetCursor()
+		h.log.Info("questa istanza è ora il capo: motore, correlatore, controllo dei sensori e pulizia girano qui")
+	}
+	h.lead.onLose = func() { h.log.Warn("questa istanza non è più il capo") }
 	return h, nil
 }
 
 func (h *Hub) Close() {
+	if h.lead != nil {
+		h.lead.release()
+	}
 	if h.nc != nil {
 		h.nc.Drain()
 	}
@@ -186,11 +201,13 @@ func (h *Hub) Close() {
 // Run avvia il server HTTP e le attività periodiche; termina quando ctx viene annullato.
 func (h *Hub) Run(ctx context.Context) error {
 	// Il web avvisa l'hub quando cambia qualcosa: niente attesa del giro successivo.
+	// Questi comandi arrivano a tutte le istanze, perché ognuna tiene la sua copia delle impostazioni.
 	sub, err := h.nc.Subscribe("hw.control.>", func(m *nats.Msg) {
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		h.log.Info("comando ricevuto", "subject", m.Subject)
 		switch m.Subject {
+		case "hw.control.customtest":
+			return // va a una sola istanza: sottoscrizione a gruppo qui sotto
 		case "hw.control.sensors":
 			h.auth.flush()
 		case "hw.control.rules":
@@ -201,9 +218,6 @@ func (h *Hub) Run(ctx context.Context) error {
 				h.log.Warn("catalogo delle regole", "err", err)
 			}
 			h.supp.load(rctx, h.pg)
-		case "hw.control.customtest":
-			h.customTestHandler(ctx, m)
-			return
 		case "hw.control.intel":
 			h.intel.control(rctx, m.Data)
 		default:
@@ -211,12 +225,32 @@ func (h *Hub) Run(ctx context.Context) error {
 				h.log.Warn("rilettura impostazioni", "err", err)
 			}
 		}
+		h.log.Info("comando ricevuto", "subject", m.Subject)
 		h.live.publishState()
 	})
 	if err != nil {
 		return err
 	}
 	defer sub.Unsubscribe()
+	// la prova di una regola sullo storico la fa una sola istanza, scelta da NATS
+	testSub, err := h.nc.QueueSubscribe("hw.control.customtest", "hyperwave-hub", func(m *nats.Msg) {
+		h.log.Info("comando ricevuto", "subject", m.Subject)
+		h.customTestHandler(ctx, m)
+	})
+	if err != nil {
+		return err
+	}
+	defer testSub.Unsubscribe()
+	// le istanze che non sono capo inviano al capo la banda dei sensori che ricevono
+	ratesSub, err := h.nc.Subscribe(liveRatesSubject, func(m *nats.Msg) {
+		if h.lead.Is() {
+			h.live.mergeRates(m.Data)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	defer ratesSub.Unsubscribe()
 
 	srv := &http.Server{
 		Addr:              h.cfg.Listen,
@@ -233,6 +267,11 @@ func (h *Hub) Run(ctx context.Context) error {
 			errc <- err
 		}
 	}()
+
+	// prima elezione subito, così un'istanza sola parte già come capo
+	if err := h.lead.step(ctx); err != nil {
+		h.log.Warn("elezione del capo", "err", err)
+	}
 
 	var wg sync.WaitGroup
 	every := func(name string, d time.Duration, fn func(context.Context) error) {
@@ -253,22 +292,35 @@ func (h *Hub) Run(ctx context.Context) error {
 			}
 		}()
 	}
+	// leaderOnly: attività che devono girare su una sola istanza alla volta
+	leaderOnly := func(fn func(context.Context) error) func(context.Context) error {
+		return func(ctx context.Context) error {
+			if !h.lead.Is() {
+				return nil
+			}
+			return fn(ctx)
+		}
+	}
+	every("capo", leaderCheck, h.lead.step)
 	every("live", 5*time.Second, func(ctx context.Context) error {
 		err := h.state.reload(ctx, h.pg)
 		h.live.publishState()
 		return err
 	})
+	// su tutte le istanze: svuotano ciò che ognuna ha raccolto in memoria o aggiornano le sue copie
 	every("inventario", 10*time.Second, h.inv.flush)
-	every("motore", 60*time.Second, h.eng.tick)
-	every("sensori", 20*time.Second, h.checkSensors)
 	every("nomi", 60*time.Second, func(ctx context.Context) error { return h.enr.refreshNames(ctx, h.pg) })
 	every("eccezioni", 60*time.Second, func(ctx context.Context) error { return h.supp.load(ctx, h.pg) })
-	every("minacce", 5*time.Minute, h.intel.tick)
 	every("minacce-allarmi", 30*time.Second, h.intel.flushHits)
-	every("incidenti", 60*time.Second, h.correlate)
-	every("pulizia", time.Hour, h.cleanup)
+	every("minacce-copia", 15*time.Minute, h.intel.refresh)
+	// solo sul capo
+	every("motore", 60*time.Second, leaderOnly(h.eng.tick))
+	every("sensori", 20*time.Second, leaderOnly(h.checkSensors))
+	every("minacce", 5*time.Minute, leaderOnly(h.intel.tick))
+	every("incidenti", 60*time.Second, leaderOnly(h.correlate))
+	every("pulizia", time.Hour, leaderOnly(h.cleanup))
 	if h.cfg.VigilURL != "" {
-		every("vigil", 30*time.Second, h.checkVigil)
+		every("vigil", 30*time.Second, leaderOnly(h.checkVigil))
 	}
 
 	select {
@@ -292,6 +344,8 @@ func (h *Hub) cleanup(ctx context.Context) error {
 		args []any
 	}{
 		{"DELETE FROM sessions WHERE expires_at < now()", nil},
+		{"DELETE FROM login_failures WHERE reset_at < now()", nil},
+		{"DELETE FROM backfill_marks WHERE at < now() - interval '1 hour'", nil},
 		{"DELETE FROM alerts WHERE status = 'resolved' AND resolved_at < now() - make_interval(days => $1)", []any{h.cfg.AlertRetention}},
 		{"DELETE FROM incidents WHERE status = 'closed' AND closed_at < now() - make_interval(days => $1)", []any{h.cfg.AlertRetention}},
 		{"DELETE FROM audit_log WHERE ts < now() - make_interval(days => $1)", []any{h.cfg.AuditRetention}},

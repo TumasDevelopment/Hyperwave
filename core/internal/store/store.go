@@ -153,6 +153,22 @@ type CHOptions struct {
 
 var identifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// mergeTreeEngine trova i motori MergeTree non replicati nelle migrazioni (MergeTree, SummingMergeTree…).
+var mergeTreeEngine = regexp.MustCompile(`\bENGINE\s*=\s*([A-Za-z]*)MergeTree\b`)
+
+// replicate trasforma i motori MergeTree nei corrispondenti Replicated*MergeTree. Senza
+// argomenti di percorso: dentro un database Replicated ClickHouse usa quelli predefiniti
+// (/clickhouse/tables/{uuid}/{shard}, {replica}), uguali su tutti i nodi.
+func replicate(stmt string) string {
+	return mergeTreeEngine.ReplaceAllStringFunc(stmt, func(m string) string {
+		sub := mergeTreeEngine.FindStringSubmatch(m)
+		if strings.HasPrefix(sub[1], "Replicated") {
+			return m
+		}
+		return "ENGINE = Replicated" + sub[1] + "MergeTree"
+	})
+}
+
 // MigrateCH crea il database (se manca) e applica le migrazioni mancanti.
 func MigrateCH(ctx context.Context, ch *chx.Client, opt CHOptions) (applied []string, err error) {
 	db := ch.DB
@@ -166,7 +182,20 @@ func MigrateCH(ctx context.Context, ch *chx.Client, opt CHOptions) (applied []st
 	if err := root.Exec(ctx, "CREATE DATABASE IF NOT EXISTS "+db, nil); err != nil {
 		return nil, fmt.Errorf("creazione del database ClickHouse: %w", err)
 	}
-	if err := root.Exec(ctx, "CREATE TABLE IF NOT EXISTS "+db+".hw_migrations (version UInt32, name String, applied_at DateTime DEFAULT now()) ENGINE = MergeTree ORDER BY version", nil); err != nil {
+	// ClickHouse replicato (docs/alta-disponibilita.md): se l'amministratore ha creato il database
+	// con il motore Replicated, le tabelle nascono replicate e le istruzioni arrivano a tutti i nodi.
+	type dbEngine struct {
+		Engine string `json:"engine"`
+	}
+	engines, err := chx.Query[dbEngine](ctx, root, "SELECT engine FROM system.databases WHERE name = {db:String}", map[string]string{"db": db})
+	if err != nil {
+		return nil, err
+	}
+	fix := func(stmt string) string { return stmt }
+	if len(engines) == 1 && engines[0].Engine == "Replicated" {
+		fix = replicate
+	}
+	if err := root.Exec(ctx, fix("CREATE TABLE IF NOT EXISTS "+db+".hw_migrations (version UInt32, name String, applied_at DateTime DEFAULT now()) ENGINE = MergeTree ORDER BY version"), nil); err != nil {
 		return nil, err
 	}
 	type row struct {
@@ -193,7 +222,7 @@ func MigrateCH(ctx context.Context, ch *chx.Client, opt CHOptions) (applied []st
 		}
 		// Le istruzioni usano IF NOT EXISTS: se una migrazione si interrompe a metà, si può ripetere.
 		for _, stmt := range splitSQL(repl.Replace(m.body)) {
-			if err := root.Exec(ctx, stmt, nil); err != nil {
+			if err := root.Exec(ctx, fix(stmt), nil); err != nil {
 				return applied, fmt.Errorf("migrazione ClickHouse %s: %w", m.name, err)
 			}
 		}
